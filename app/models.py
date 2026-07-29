@@ -26,8 +26,11 @@ class UserRole(str, enum.Enum):
 
 class User(Base):
     """
-    Teacher yoki superadmin. Telegram orqali ro'yxatdan o'tish keyin
-    ulanadi -- hozircha DEV_MODE orqali to'g'ridan-to'g'ri yaratiladi.
+    Teacher yoki superadmin. Ro'yxatdan o'tish Telegram bot orqali bo'ladi:
+    foydalanuvchi botga /start bosib telefon raqamini yuboradi, shu yerda
+    User yaratiladi (yoki mavjudi telegram_id bilan bog'lanadi). Kirish
+    esa telefon raqam + botga yuborilgan bir martalik kod orqali amalga
+    oshadi (parol faqat superadmin kabi maxsus holatlar uchun qoladi).
     """
     __tablename__ = "users"
 
@@ -43,6 +46,26 @@ class User(Base):
     groups = relationship("Group", back_populates="teacher")
     test_sets = relationship("TestSet", back_populates="teacher")
     exams = relationship("Exam", back_populates="teacher")
+
+
+class PhoneVerificationCode(Base):
+    """
+    Telefon raqamga Telegram bot orqali yuborilgan bir martalik kirish
+    kodlari. Har bir /auth/request-code chaqiruvi yangi qator yaratadi;
+    /auth/verify-code shu jadvaldagi eng oxirgi ishlatilmagan (is_used=False)
+    va muddati o'tmagan qatorni tekshiradi. code_hash -- kodning o'zi emas,
+    balki bcrypt hash'i (xotira/DB sizib ketsa ham kod ochilib qolmasligi
+    uchun).
+    """
+    __tablename__ = "phone_verification_codes"
+
+    id = Column(String, primary_key=True, default=uid)
+    phone = Column(String, nullable=False, index=True)
+    code_hash = Column(String, nullable=False)
+    attempts = Column(Integer, default=0, nullable=False)
+    is_used = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +212,11 @@ class ExamStudent(Base):
     variant_id = Column(String, ForeignKey("variants.id"), nullable=False)
 
     booklet_id = Column(String(7), unique=True, nullable=False, index=True)
-    answer_key_json = Column(JSON, nullable=False)  # {tartib: {"togri_harf": "B", "letter_map": {...}}}
+    # app/omr/generate_question_booklet.py -> build() qaytargan format bilan BIR XIL:
+    # {tartib: {"fan": ..., "ball": ..., "correct_letter_shown_to_student": "B",
+    #           "letter_to_original_option": {...}}}
+    # app/services/omr_service.py aynan shu maydon nomlarini kutadi.
+    answer_key_json = Column(JSON, nullable=False)
 
     booklet_pdf_path = Column(String, nullable=True)
     answer_sheet_pdf_path = Column(String, nullable=True)

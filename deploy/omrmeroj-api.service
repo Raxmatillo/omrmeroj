@@ -1,0 +1,15 @@
+[Unit]
+Description=OMR Meroj FastAPI backend
+After=network.target
+
+[Service]
+Type=simple
+User=omrmeroj
+WorkingDirectory=/opt/omrmeroj
+EnvironmentFile=/opt/omrmeroj/.env
+ExecStart=/opt/omrmeroj/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

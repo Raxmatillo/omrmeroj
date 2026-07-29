@@ -26,6 +26,17 @@ class Settings(BaseSettings):
     OUTPUT_DIR: str = "./generated_files"
     UPLOAD_DIR: str = "./uploads"
 
+    # --- Telegram bot orqali login (telefon + bir martalik kod) ---
+    # Botni @BotFather'dan olingan token. Bo'sh bo'lsa /auth/request-code
+    # va bot process ishlamaydi.
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_API_BASE: str = "https://api.telegram.org"
+
+    VERIFICATION_CODE_LENGTH: int = 6
+    VERIFICATION_CODE_TTL_MINUTES: int = 5
+    VERIFICATION_CODE_MAX_ATTEMPTS: int = 5
+    VERIFICATION_CODE_RESEND_COOLDOWN_SECONDS: int = 60
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

@@ -9,3 +9,16 @@ pydantic-settings
 psycopg2-binary
 httpx
 bcrypt==4.0.1
+
+# Telegram bot
+aiogram>=3.4
+
+# OMR: javob varag'ini o'qish (app/omr/omr_reader.py) va
+# generatsiya qilish (app/omr/answer_sheet_generator.py,
+# app/omr/generate_question_booklet.py)
+opencv-python-headless>=4.9
+numpy>=1.26
+pdf2image>=1.17
+Pillow>=10.0
+reportlab>=4.0
+qrcode[pil]>=7.4

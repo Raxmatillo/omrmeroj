@@ -17,6 +17,20 @@ class LoginIn(BaseModel):
     password: str
 
 
+class RequestCodeIn(BaseModel):
+    phone: str
+
+
+class RequestCodeOut(BaseModel):
+    sent: bool
+    detail: str
+
+
+class VerifyCodeIn(BaseModel):
+    phone: str
+    code: str
+
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"

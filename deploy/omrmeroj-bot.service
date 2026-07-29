@@ -1,0 +1,15 @@
+[Unit]
+Description=OMR Meroj Telegram bot
+After=network.target omrmeroj-api.service
+
+[Service]
+Type=simple
+User=omrmeroj
+WorkingDirectory=/opt/omrmeroj
+EnvironmentFile=/opt/omrmeroj/.env
+ExecStart=/opt/omrmeroj/.venv/bin/python -m bot.main
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
