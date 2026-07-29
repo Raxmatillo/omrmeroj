@@ -1,35 +1,62 @@
+# app/utils/phone.py
 # -*- coding: utf-8 -*-
 """
 O'zbekiston mobil raqamlarini formatga tekshiradi.
-
-MUHIM: bu faqat FORMAT (operator kodi + uzunlik) tekshiruvi. Raqamning
-haqiqatan ham "tirik" ekanini SMS orqali emas, balki bot orqali bilamiz --
-foydalanuvchi shu raqamga bog'langan Telegram akkaunt bilan "Telefon
-yuborish" tugmasini bossagina (bot/handlers/contact.py -> contact.phone_number)
-raqam haqiqiy hisoblanadi, chunki uni Telegram allaqachon tasdiqlagan.
+Operator kodlari .env dan o'qiladi.
 """
 import re
+from app.config import settings
 
-_UZ_OPERATOR_CODES = (
-    "90", "91", "93", "94", "95", "97", "98", "99",
-    "33", "88",
-    "20", "77", "78", "79",
-)
 
-_UZ_PHONE_RE = re.compile(r"^\+998(" + "|".join(_UZ_OPERATOR_CODES) + r")\d{7}$")
+def get_operator_codes() -> tuple:
+    """.env dan operator kodlarini o'qiydi"""
+    if settings.PHONE_ALLOWED_OPERATORS:
+        return tuple(op.strip() for op in settings.PHONE_ALLOWED_OPERATORS.split(","))
+    # Default qiymatlar (agar .env da bo'lmasa)
+    return ("90", "91", "93", "94", "95", "97", "98", "99", "33", "88", "77", "50")
+
+
+def get_phone_regex() -> re.Pattern:
+    """Telefon regex patternini qaytaradi"""
+    # Agar .env da PHONE_PATTERN berilgan bo'lsa, undan foydalanamiz
+    if hasattr(settings, 'PHONE_PATTERN') and settings.PHONE_PATTERN:
+        return re.compile(settings.PHONE_PATTERN)
+    
+    # Aks holda operator kodlaridan pattern yasaymiz
+    operators = "|".join(get_operator_codes())
+    return re.compile(r"^\+998(" + operators + r")\d{7}$")
 
 
 def normalize_phone(phone: str) -> str:
+    """Telefon raqamni standart formatga keltiradi"""
+    # Bo'sh joy va maxsus belgilarni olib tashlash
     p = phone.strip().replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    
+    # + belgisini tekshirish
     if not p.startswith("+"):
-        p = "+" + p.lstrip("0")
+        # Agar mamlakat kodi bo'lmasa, qo'shamiz
+        if not p.startswith(settings.PHONE_COUNTRY_CODE):
+            p = f"+{settings.PHONE_COUNTRY_CODE}{p.lstrip('0')}"
+        else:
+            p = f"+{p}"
     return p
 
 
 def validate_uzbek_phone(phone: str) -> str:
+    """Telefon raqamni tekshiradi va normallashtiradi"""
     normalized = normalize_phone(phone)
-    if not _UZ_PHONE_RE.match(normalized):
+    pattern = get_phone_regex()
+    
+    if not pattern.match(normalized):
+        operators = ", ".join(get_operator_codes())
         raise ValueError(
-            "Telefon raqam O'zbekiston formatida bo'lishi kerak, masalan: +998901234567"
+            f"Telefon raqam noto'g'ri formatda.\n"
+            f"Namuna: +{settings.PHONE_COUNTRY_CODE}90XXXXXXX\n"
+            f"Ruxsat etilgan operatorlar: {operators}"
         )
     return normalized
+
+
+# Eski kod bilan moslik uchun (agar biron joyda ishlatilsa)
+_UZ_OPERATOR_CODES = get_operator_codes()
+_UZ_PHONE_RE = get_phone_regex()

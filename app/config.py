@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,7 +38,25 @@ class Settings(BaseSettings):
     VERIFICATION_CODE_MAX_ATTEMPTS: int = 5
     VERIFICATION_CODE_RESEND_COOLDOWN_SECONDS: int = 60
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Telefon validatsiyasi
+    PHONE_PATTERN: str = r"^\+998[0-9]{9}$"
+    PHONE_COUNTRY_CODE: str = "998"
+    PHONE_MIN_LENGTH: int = 9  # Operator kodisiz raqam uzunligi
+    PHONE_MAX_LENGTH: int = 9
+    PHONE_ALLOWED_OPERATORS: str = "90,91,93,94,95,97,98,99,33,88,77,55,50"
+    
+    @property
+    def phone_operators_list(self) -> List[str]:
+        """Operator kodlarini listga o'giradi"""
+        return [op.strip() for op in self.PHONE_ALLOWED_OPERATORS.split(",")]
+    
+    # 📌 FAQAT bittasini ishlating: SettingsConfigDict (yangicha usul)
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        case_sensitive=True  # O'zgaruvchilar nomi katta-kichik harfga sezgir
+    )
 
 
 settings = Settings()

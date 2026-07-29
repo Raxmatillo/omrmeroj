@@ -72,3 +72,9 @@ def create_login_code(db: Session, phone: str) -> str:
     db.add(record)
     db.commit()
     return code
+
+# bot/services/user_service.py
+
+def get_user_by_phone(db: Session, phone: str):
+    """Telefon raqam bo'yicha foydalanuvchini qaytaradi"""
+    return db.query(models.User).filter(models.User.phone == phone).first()

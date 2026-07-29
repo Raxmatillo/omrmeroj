@@ -1,62 +1,62 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, Field
 
 from app.utils.phone import validate_uzbek_phone
+
 
 
 # ---------- AUTH ----------
 
 class RegisterRequestIn(BaseModel):
-    """Saytda 'Ro'yxatdan o'tish' formasi: telefon + parol + F.I.Sh.
-    Bu bosqich hisobni FAOLLASHTIRMAYDI -- botga kod yuboradi."""
+    """Saytda 'Ro'yxatdan o'tish' formasi: telefon + parol + F.I.Sh."""
     phone: str
-    password: str
-    full_name: str | None = None
-
+    password: str = Field(..., min_length=6)
+    full_name: str = Field(..., min_length=3, max_length=50)
+    
     @field_validator("phone")
     @classmethod
-    def _check_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
 
 class RegisterVerifyIn(BaseModel):
     phone: str
-    code: str
-
+    code: str = Field(..., min_length=4, max_length=6)
+    
     @field_validator("phone")
     @classmethod
-    def _check_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
 
 class LoginIn(BaseModel):
     phone: str
     password: str
-
+    
     @field_validator("phone")
     @classmethod
-    def _check_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
 
 class ForgotPasswordIn(BaseModel):
     phone: str
-
+    
     @field_validator("phone")
     @classmethod
-    def _check_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
 
 class ResetPasswordIn(BaseModel):
     phone: str
-    code: str
-    new_password: str
-
+    code: str = Field(..., min_length=4, max_length=6)
+    new_password: str = Field(..., min_length=6)
+    
     @field_validator("phone")
     @classmethod
-    def _check_phone(cls, v: str) -> str:
+    def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
 
@@ -165,3 +165,4 @@ class ExamOut(BaseModel):
     status: str
     created_at: datetime
     expires_at: datetime | None
+

@@ -807,7 +807,7 @@ if __name__ == "__main__":
 
     # Endi .jpg/.png bilan bir qatorda .pdf ham beriladi:
     #   image_path = "javoblar_varaqasi_belgilangan.pdf"
-    image_path = "javoblar_varaqasi.jpg"
+    image_path = "murakkab3.pdf"
 
     report = detect_answer_sheet(image_path)
 
