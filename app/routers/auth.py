@@ -21,70 +21,21 @@ from app.services.telegram import send_telegram_message
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/dev-register", response_model=schemas.UserOut)
-def dev_register(payload: schemas.DevRegisterIn, db: Session = Depends(get_db)):
-    """
-    FAQAT DEV_MODE=True bo'lganda ishlaydi. Productionda DEV_MODE=False
-    qilinadi -- ro'yxatdan o'tish endi Telegram bot orqali (/start ->
-    telefon raqam yuborish) amalga oshadi, bu endpoint faqat lokal
-    testlash uchun qoladi.
-    """
-    if not settings.DEV_MODE:
-        raise HTTPException(status_code=403, detail="Dev-register o'chirilgan")
+# ---------------------------------------------------------------------
+# Ichki yordamchi funksiyalar
+# ---------------------------------------------------------------------
 
-    existing = db.query(models.User).filter(models.User.phone == payload.phone).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Bu raqam bilan foydalanuvchi mavjud")
-
-    user = models.User(
-        phone=payload.phone,
-        password_hash=hash_password(payload.password),
-        full_name=payload.full_name,
-        role=models.UserRole(payload.role),
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
-
-
-@router.post("/login", response_model=schemas.TokenOut)
-def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
-    """Parol bilan kirish -- asosan superadmin yoki parol bilan yaratilgan
-    akkauntlar uchun. Telegram orqali bog'langan teacher akkauntlarida
-    password_hash ishlatib bo'lmaydigan qiymat bilan yaratiladi (pastga
-    qarang), shuning uchun ular faqat /auth/request-code +
-    /auth/verify-code orqali kiradi."""
-    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Telefon raqami yoki parol xato")
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Akkaunt faol emas")
-    token = create_access_token(user.id, user.role.value)
-    return schemas.TokenOut(access_token=token)
-
-
-@router.post("/request-code", response_model=schemas.RequestCodeOut)
-async def request_code(payload: schemas.RequestCodeIn, db: Session = Depends(get_db)):
-    """
-    Mobil ilova shu endpointni chaqiradi. Foydalanuvchi avval Telegram
-    botga /start bosib telefon raqamini yubormagan bo'lsa (ya'ni
-    telegram_id bog'lanmagan bo'lsa) kod yuborilmaydi -- avval botda
-    ro'yxatdan o'tish talab qilinadi.
-    """
-    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
-    if not user or not user.telegram_id:
-        raise HTTPException(
-            status_code=404,
-            detail="Bu raqam Telegram botga ulanmagan. Avval botda /start bosib ro'yxatdan o'ting.",
-        )
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Akkaunt faol emas")
-
+def _create_and_queue_code(db: Session, phone: str, purpose: str) -> str:
+    """Cooldown'ni tekshiradi, yangi kod yaratib DB'ga yozadi va uni
+    (hali yubormasdan) qaytaradi -- chaqiruvchi shu kodni Telegram orqali
+    yuboradi."""
     cooldown = timedelta(seconds=settings.VERIFICATION_CODE_RESEND_COOLDOWN_SECONDS)
     last = (
         db.query(models.PhoneVerificationCode)
-        .filter(models.PhoneVerificationCode.phone == payload.phone)
+        .filter(
+            models.PhoneVerificationCode.phone == phone,
+            models.PhoneVerificationCode.purpose == purpose,
+        )
         .order_by(models.PhoneVerificationCode.created_at.desc())
         .first()
     )
@@ -97,32 +48,26 @@ async def request_code(payload: schemas.RequestCodeIn, db: Session = Depends(get
 
     code = generate_verification_code()
     record = models.PhoneVerificationCode(
-        phone=payload.phone,
+        phone=phone,
         code_hash=hash_code(code),
+        purpose=purpose,
         expires_at=datetime.utcnow() + timedelta(minutes=settings.VERIFICATION_CODE_TTL_MINUTES),
     )
     db.add(record)
     db.commit()
-
-    sent = await send_telegram_message(
-        user.telegram_id,
-        f"Kirish kodingiz: {code}\n"
-        f"Kod {settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa amal qiladi. Hech kimga bermang.",
-    )
-    if not sent:
-        raise HTTPException(status_code=502, detail="Telegram orqali kod yuborib bo'lmadi, birozdan keyin urinib ko'ring")
-
-    return schemas.RequestCodeOut(sent=True, detail="Kod Telegram botga yuborildi")
+    return code
 
 
-@router.post("/verify-code", response_model=schemas.TokenOut)
-def verify_code(payload: schemas.VerifyCodeIn, db: Session = Depends(get_db)):
+def _consume_valid_code(db: Session, phone: str, code: str, purpose: str) -> None:
+    """Berilgan kod shu telefon+purpose uchun to'g'ri va amal qilayotgan
+    bo'lsa -- is_used=True qilib belgilaydi. Aks holda 400 qaytaradi."""
     invalid = HTTPException(status_code=400, detail="Kod noto'g'ri yoki muddati tugagan")
 
     record = (
         db.query(models.PhoneVerificationCode)
         .filter(
-            models.PhoneVerificationCode.phone == payload.phone,
+            models.PhoneVerificationCode.phone == phone,
+            models.PhoneVerificationCode.purpose == purpose,
             models.PhoneVerificationCode.is_used.is_(False),
         )
         .order_by(models.PhoneVerificationCode.created_at.desc())
@@ -134,8 +79,7 @@ def verify_code(payload: schemas.VerifyCodeIn, db: Session = Depends(get_db)):
         raise invalid
     if record.attempts >= settings.VERIFICATION_CODE_MAX_ATTEMPTS:
         raise invalid
-
-    if not verify_code_hash(payload.code, record.code_hash):
+    if not verify_code_hash(code, record.code_hash):
         record.attempts += 1
         db.commit()
         raise invalid
@@ -143,9 +87,131 @@ def verify_code(payload: schemas.VerifyCodeIn, db: Session = Depends(get_db)):
     record.is_used = True
     db.commit()
 
+
+NOT_LINKED_DETAIL = (
+    "Bu raqam Telegram botga ulanmagan. Avval botda /start bosib "
+    "telefon raqamingizni yuboring."
+)
+
+
+# ---------------------------------------------------------------------
+# RO'YXATDAN O'TISH
+# ---------------------------------------------------------------------
+#
+# Oqim:
+#   1) Foydalanuvchi botga /start bosib "Telefon yuborish" tugmasi orqali
+#      kontakt yuboradi (bot/handlers/contact.py) -- shu bosqichda User
+#      qatori yaratiladi (telegram_id bilan), lekin is_verified=False,
+#      password_hash esa vaqtinchalik tasodifiy qiymat.
+#   2) Sayt: POST /auth/register-request { phone, password, full_name }
+#      -- haqiqiy parolni saqlaydi va botga tasdiqlash kodi yuboradi.
+#   3) Sayt: POST /auth/register-verify { phone, code } -- kod to'g'ri
+#      bo'lsa is_verified=True qilib, token qaytaradi (avtomatik login).
+#
+
+@router.post("/register-request", response_model=schemas.RequestCodeOut)
+async def register_request(payload: schemas.RegisterRequestIn, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.phone == payload.phone).first()
-    if not user or not user.is_active:
+    if not user or not user.telegram_id:
+        raise HTTPException(status_code=404, detail=NOT_LINKED_DETAIL)
+    if not user.is_active:
         raise HTTPException(status_code=403, detail="Akkaunt faol emas")
+    if user.is_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Bu raqam bilan hisob allaqachon faol. /auth/login orqali kiring.",
+        )
+
+    # Parolni shu yerda saqlaymiz (hash qilingan holda) -- lekin
+    # is_verified hali False, shuning uchun login hali ishlamaydi.
+    user.password_hash = hash_password(payload.password)
+    if payload.full_name:
+        user.full_name = payload.full_name
+    db.commit()
+
+    code = _create_and_queue_code(db, user.phone, purpose="register")
+    sent = await send_telegram_message(
+        user.telegram_id,
+        f"Ro'yxatdan o'tishni tasdiqlash kodi: {code}\n"
+        f"Kod {settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa amal qiladi. Hech kimga bermang.",
+    )
+    if not sent:
+        raise HTTPException(status_code=502, detail="Telegram orqali kod yuborib bo'lmadi, birozdan keyin urinib ko'ring")
+
+    return schemas.RequestCodeOut(sent=True, detail="Tasdiqlash kodi Telegram botga yuborildi")
+
+
+@router.post("/register-verify", response_model=schemas.TokenOut)
+def register_verify(payload: schemas.RegisterVerifyIn, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Foydalanuvchi topilmadi")
+
+    _consume_valid_code(db, payload.phone, payload.code, purpose="register")
+
+    user.is_verified = True
+    db.commit()
+
+    token = create_access_token(user.id, user.role.value)
+    return schemas.TokenOut(access_token=token)
+
+
+# ---------------------------------------------------------------------
+# LOGIN (telefon + parol)
+# ---------------------------------------------------------------------
+
+@router.post("/login", response_model=schemas.TokenOut)
+def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    if not user or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Telefon raqami yoki parol xato")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Akkaunt faol emas")
+    if not user.is_verified:
+        raise HTTPException(
+            status_code=403,
+            detail="Ro'yxatdan o'tish yakunlanmagan -- avval /auth/register-verify orqali kodni tasdiqlang",
+        )
+    token = create_access_token(user.id, user.role.value)
+    return schemas.TokenOut(access_token=token)
+
+
+# ---------------------------------------------------------------------
+# PAROLNI UNUTDIM
+# ---------------------------------------------------------------------
+
+@router.post("/forgot-password", response_model=schemas.RequestCodeOut)
+async def forgot_password(payload: schemas.ForgotPasswordIn, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    if not user or not user.telegram_id:
+        raise HTTPException(status_code=404, detail=NOT_LINKED_DETAIL)
+    if not user.is_verified:
+        raise HTTPException(status_code=400, detail="Bu raqam hali ro'yxatdan o'tmagan.")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Akkaunt faol emas")
+
+    code = _create_and_queue_code(db, user.phone, purpose="reset_password")
+    sent = await send_telegram_message(
+        user.telegram_id,
+        f"Parolni tiklash kodi: {code}\n"
+        f"Kod {settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa amal qiladi. Hech kimga bermang.",
+    )
+    if not sent:
+        raise HTTPException(status_code=502, detail="Telegram orqali kod yuborib bo'lmadi, birozdan keyin urinib ko'ring")
+
+    return schemas.RequestCodeOut(sent=True, detail="Kod Telegram botga yuborildi")
+
+
+@router.post("/reset-password", response_model=schemas.TokenOut)
+def reset_password(payload: schemas.ResetPasswordIn, db: Session = Depends(get_db)):
+    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Foydalanuvchi topilmadi")
+
+    _consume_valid_code(db, payload.phone, payload.code, purpose="reset_password")
+
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
 
     token = create_access_token(user.id, user.role.value)
     return schemas.TokenOut(access_token=token)

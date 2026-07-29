@@ -1,34 +1,68 @@
 # -*- coding: utf-8 -*-
 from datetime import datetime
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app.utils.phone import validate_uzbek_phone
 
 
 # ---------- AUTH ----------
 
-class DevRegisterIn(BaseModel):
+class RegisterRequestIn(BaseModel):
+    """Saytda 'Ro'yxatdan o'tish' formasi: telefon + parol + F.I.Sh.
+    Bu bosqich hisobni FAOLLASHTIRMAYDI -- botga kod yuboradi."""
     phone: str
     password: str
     full_name: str | None = None
-    role: str = "teacher"
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
+
+
+class RegisterVerifyIn(BaseModel):
+    phone: str
+    code: str
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
 
 
 class LoginIn(BaseModel):
     phone: str
     password: str
 
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
 
-class RequestCodeIn(BaseModel):
+
+class ForgotPasswordIn(BaseModel):
     phone: str
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
+
+
+class ResetPasswordIn(BaseModel):
+    phone: str
+    code: str
+    new_password: str
+
+    @field_validator("phone")
+    @classmethod
+    def _check_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
 
 
 class RequestCodeOut(BaseModel):
     sent: bool
     detail: str
-
-
-class VerifyCodeIn(BaseModel):
-    phone: str
-    code: str
 
 
 class TokenOut(BaseModel):
@@ -42,7 +76,7 @@ class UserOut(BaseModel):
     phone: str
     full_name: str | None
     role: str
-
+    is_verified: bool
 
 # ---------- GURUHLAR ----------
 
@@ -83,7 +117,7 @@ class QuestionIn(BaseModel):
     variant_b_html: str
     variant_c_html: str
     variant_d_html: str
-    togri_javob: str  # A/B/C/D
+    togri_javob: str
 
 
 class QuestionOut(QuestionIn):

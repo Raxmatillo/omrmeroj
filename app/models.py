@@ -25,13 +25,6 @@ class UserRole(str, enum.Enum):
 
 
 class User(Base):
-    """
-    Teacher yoki superadmin. Ro'yxatdan o'tish Telegram bot orqali bo'ladi:
-    foydalanuvchi botga /start bosib telefon raqamini yuboradi, shu yerda
-    User yaratiladi (yoki mavjudi telegram_id bilan bog'lanadi). Kirish
-    esa telefon raqam + botga yuborilgan bir martalik kod orqali amalga
-    oshadi (parol faqat superadmin kabi maxsus holatlar uchun qoladi).
-    """
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=uid)
@@ -41,6 +34,11 @@ class User(Base):
     full_name = Column(String, nullable=True)
     telegram_id = Column(String, nullable=True, unique=True)
     is_active = Column(Boolean, default=True)
+    # Parol saqlangan-u, lekin bot orqali TASDIQLANMAGAN bo'lishi mumkin
+    # (register-request bosqichida password_hash yoziladi, lekin
+    # register-verify muvaffaqiyatli bo'lgunicha is_verified=False qoladi
+    # va login rad etiladi).
+    is_verified = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     groups = relationship("Group", back_populates="teacher")
@@ -49,19 +47,15 @@ class User(Base):
 
 
 class PhoneVerificationCode(Base):
-    """
-    Telefon raqamga Telegram bot orqali yuborilgan bir martalik kirish
-    kodlari. Har bir /auth/request-code chaqiruvi yangi qator yaratadi;
-    /auth/verify-code shu jadvaldagi eng oxirgi ishlatilmagan (is_used=False)
-    va muddati o'tmagan qatorni tekshiradi. code_hash -- kodning o'zi emas,
-    balki bcrypt hash'i (xotira/DB sizib ketsa ham kod ochilib qolmasligi
-    uchun).
-    """
     __tablename__ = "phone_verification_codes"
 
     id = Column(String, primary_key=True, default=uid)
     phone = Column(String, nullable=False, index=True)
     code_hash = Column(String, nullable=False)
+    # "register" | "reset_password" -- bir turdagi kod boshqa maqsadda
+    # ishlatilib qolmasligi uchun (masalan registratsiya kodi bilan
+    # parol tiklab bo'lmaydi).
+    purpose = Column(String, nullable=False, default="register")
     attempts = Column(Integer, default=0, nullable=False)
     is_used = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
