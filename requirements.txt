@@ -22,3 +22,5 @@ pdf2image>=1.17
 Pillow>=10.0
 reportlab>=4.0
 qrcode[pil]>=7.4
+weasyprint>=61
+matplotlib>=3.8

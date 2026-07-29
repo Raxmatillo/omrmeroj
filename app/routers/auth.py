@@ -164,6 +164,10 @@ def register_verify(payload: schemas.RegisterVerifyIn, db: Session = Depends(get
 def login(payload: schemas.LoginIn, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.phone == payload.phone).first()
     if not user or not verify_password(payload.password, user.password_hash):
+        print("User: ", user)
+        print("User password hash:", user.password_hash)
+        print(verify_password(payload.password, user.password_hash))
+        print("Payload: ", payload)
         raise HTTPException(status_code=401, detail="Telefon raqami yoki parol xato")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Akkaunt faol emas")
