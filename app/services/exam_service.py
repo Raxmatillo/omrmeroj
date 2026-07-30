@@ -48,6 +48,27 @@ def _generate_booklet_id(db: Session, rng: random.Random) -> str:
             return candidate
     raise ExamServiceError("Noyob booklet ID generatsiya qilib bo'lmadi, qayta urinib ko'ring")
 
+def _assign_paper_variants(students: list[models.Student], variant_count: int, rng: random.Random) -> dict[str, int]:
+    """
+    Har bir talabaga TEST VARIANTINI (1..variant_count) taqsimlaydi:
+      - guruh IMKON QADAR TENG bo'laklarga bo'linadi (masalan 21 talaba,
+        2 variant -> 11 va 10), qaysi talabaga qaysi variant tegishi esa
+        random.
+      - variant_count <= 1 bo'lsa, hammaga 1 qaytariladi (variant
+        belgilash umuman kerak emas).
+    """
+    if variant_count <= 1:
+        return {s.id: 1 for s in students}
+
+    n = len(students)
+    base, remainder = divmod(n, variant_count)
+    pool: list[int] = []
+    for variant_idx in range(1, variant_count + 1):
+        count = base + (1 if variant_idx <= remainder else 0)
+        pool.extend([variant_idx] * count)
+
+    rng.shuffle(pool)
+    return {student.id: pool[i] for i, student in enumerate(students)}
 
 def _question_to_dict(q: models.Question) -> dict:
     return {
@@ -170,7 +191,10 @@ def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
     return blocks
 
 
-def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: str) -> models.Exam:
+def create_exam(
+    db: Session, teacher: models.User, group_id: str, test_set_id: str,
+    paper_variant_count: int = 1,
+) -> models.Exam:
     group = db.get(models.Group, group_id)
     if not group or group.teacher_id != teacher.id:
         raise ExamServiceError("Guruh topilmadi")
@@ -213,6 +237,13 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
     db.refresh(exam)
     db.refresh(job)
 
+    # MUHIM: taqsimlash `exam.id` endi mavjud bo'lgach (seed sifatida
+    # ishlatiladi), butun guruh bo'yicha BITTA marta qilinadi -- shu bilan
+    # "yarmiga bitta, yarmiga boshqasi" balansi kafolatlanadi va exam
+    # qayta generatsiya qilinsa ham bir xil taqsimot takrorlanadi.
+    variant_rng = random.Random(f"{exam.id}-paper-variant")
+    paper_variant_map = _assign_paper_variants(students, paper_variant_count, variant_rng)
+
     output_root = Path(settings.OUTPUT_DIR) / exam.id
     savollar_dir = output_root / "Savollar"
     javoblar_dir = output_root / "Javoblar_varaqasi"
@@ -231,6 +262,7 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
         for student in students:
             rng = random.Random(f"{exam.id}-{student.id}")
             booklet_id = _generate_booklet_id(db, rng)
+            paper_variant_number = paper_variant_map[student.id] if paper_variant_count > 1 else None
 
             rendered_questions, answer_key = build_shuffled_booklet(questions, seed=f"{exam.id}-{booklet_id}")
 
@@ -238,7 +270,10 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
                 id=student.id, first_name=student.first_name, last_name=student.last_name,
                 father_name=student.middle_name or "", group_name=group.name,
             )
-            sheet_booklet = SheetBooklet(booklet_id=booklet_id, exam_id=exam.exam_code, student_id=student.id)
+            sheet_booklet = SheetBooklet(
+                booklet_id=booklet_id, exam_id=exam.exam_code, student_id=student.id,
+                variant_number=paper_variant_number,
+            )
 
             safe_name = f"{student.last_name}_{student.first_name}".replace(" ", "_")
             booklet_path = savollar_dir / f"{safe_name}_{booklet_id}_Savol.pdf"
@@ -248,6 +283,7 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
                 student={"full_name": sheet_student.full_name, "group_name": group.name},
                 exam_id=exam.exam_code, booklet_id=booklet_id,
                 rendered_questions=rendered_questions, output_path=str(booklet_path),
+                variant_number=paper_variant_number,
             )
             generate_answer_sheet(
                 output_path=str(sheet_path), student=sheet_student, exam=sheet_exam, booklet=sheet_booklet,
@@ -257,6 +293,7 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
                 exam_id=exam.id, student_id=student.id, variant_id=source_variant.id,
                 booklet_id=booklet_id, answer_key_json=answer_key,
                 booklet_pdf_path=str(booklet_path), answer_sheet_pdf_path=str(sheet_path),
+                paper_variant_number=paper_variant_number,
             ))
 
         db.flush()

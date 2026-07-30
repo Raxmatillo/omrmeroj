@@ -1,6 +1,39 @@
-./venv
+# Python cache
+__pycache__/
+*.pyc
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated files (imtihon generatsiyasi natijalari)
+generated_files/
+output/
+test/output/
+
+# IDE va OS fayllari
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# Environment variables
 .env
-venv
-./generated_files
-test
-./test
+.env.local
+.env.*.local
+
+# Uploads (agar mavjud bo'lsa)
+uploads/
+media/

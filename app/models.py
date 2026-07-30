@@ -210,6 +210,8 @@ class ExamStudent(Base):
     # {tartib: {"fan": ..., "ball": ..., "correct_letter_shown_to_student": "B",
     #           "letter_to_original_option": {...}}}
     # app/services/omr_service.py aynan shu maydon nomlarini kutadi.
+    paper_variant_number = Column(Integer, nullable=True)
+
     answer_key_json = Column(JSON, nullable=False)
 
     booklet_pdf_path = Column(String, nullable=True)
@@ -236,13 +238,19 @@ class Result(Base):
     id = Column(String, primary_key=True, default=uid)
     exam_student_id = Column(String, ForeignKey("exam_students.id"), unique=True, nullable=False)
 
-    raw_answers_json = Column(JSON, nullable=False)  # {tartib: "A"|None|"MULTI"}
+    raw_answers_json = Column(JSON, nullable=False)
     correct_count = Column(Integer, default=0)
     incorrect_count = Column(Integer, default=0)
     blank_count = Column(Integer, default=0)
     ambiguous_count = Column(Integer, default=0)
     total_score = Column(Float, default=0)
     per_subject_json = Column(JSON, default=dict)
+
+    # YANGI: talaba javob varag'ida belgilagan TEST VARIANTI kitobchada
+    # unga tayinlangan variant bilan mos kelmasa True (masalan boshqa
+    # talabaning kitobchasidan foydalangan bo'lishi mumkin).
+    detected_paper_variant = Column(Integer, nullable=True)
+    variant_mismatch = Column(Boolean, default=False)
 
     status = Column(Enum(ResultStatus), default=ResultStatus.ok)
     result_pdf_path = Column(String, nullable=True)

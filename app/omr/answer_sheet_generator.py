@@ -20,10 +20,12 @@ Xususiyatlar:
 - OMR uchun aniq koordinatalar
 - TIMING TRACK: har bir qator uchun kichik "lokator" belgisi -- reader
   bubble y-pozitsiyasini arifmetik formula bilan HISOBLAB TOPISH o'rniga,
-  shu belgining haqiqiy (siyohdagi) markazidan o'qiydi. Bu -- telefon
-  fotosida perspective-correction xatosi qator raqami oshgan sari
-  to'planib (drift qilib) ketishining oldini oladi (real Scantron/DTM
-  turidagi tizimlarda ham ishlatiladigan standart texnika).
+  shu belgining haqiqiy (siyohdagi) markazidan o'qiydi.
+- TEST VARIANTI: talabaga tayinlangan variant raqamini (1/2/3/4) o'zi
+  bo'yab belgilaydigan kichik 4 ta bubble ("Ko'rsatmalar" ramkasi
+  yonida) -- app/omr/omr_reader.py shu bubble'larni ham o'qiydi va
+  ExamStudent.paper_variant_number bilan solishtiradi (nomuvofiqlik
+  bo'lsa natija "tekshirish kerak" deb belgilanadi).
 
 Production:
 Bu modul keyinchalik FastAPI backend ichida ishlatilishi mumkin.
@@ -99,6 +101,35 @@ REGISTRATION_MARKER_SIZE_MM = 8.0
 TIMING_MARK_OFFSET_MM = 1.6
 TIMING_MARK_SIZE_MM = 1.4
 
+# ------------------------------------------------------------------
+# TEST VARIANTI bubble maydoni ("Ko'rsatmalar" ramkasi endi to'liq
+# kenglikni EGALLAMAYDI -- o'ng tomonida shu kichik box qoladi).
+# ------------------------------------------------------------------
+INSTRUCTIONS_LEFT_MM = 11.0
+INSTRUCTIONS_TOP_MM = 83.0
+INSTRUCTIONS_WIDTH_MM = 108.0
+INSTRUCTIONS_HEIGHT_MM = 25.0
+
+_INSTR_VARIANT_GAP_MM = 2.0
+VARIANT_BOX_LEFT_MM = INSTRUCTIONS_LEFT_MM + INSTRUCTIONS_WIDTH_MM + _INSTR_VARIANT_GAP_MM  # 121.0
+VARIANT_BOX_TOP_MM = INSTRUCTIONS_TOP_MM  # 83.0
+VARIANT_BOX_WIDTH_MM = 199.0 - VARIANT_BOX_LEFT_MM  # ~78.0
+VARIANT_BOX_HEIGHT_MM = INSTRUCTIONS_HEIGHT_MM  # 25.0
+
+# 4 ta bubble markazining X koordinatasi (mm, sahifa chap chetidan)
+VARIANT_BUBBLE_XS_MM = [133.0, 151.0, 169.0, 187.0]
+VARIANT_BUBBLE_Y_MM = VARIANT_BOX_TOP_MM + 19.0  # 102.0
+VARIANT_BUBBLE_RADIUS_MM = 2.2
+
+MAX_PAPER_VARIANTS = len(VARIANT_BUBBLE_XS_MM)  # 4
+
+
+# Variant bubble'lari uchun TIMING MARK -- omr_reader shu belgilardan
+# har bir bubble'ning HAQIQIY x/y markazini topadi (asosiy javob
+# ustunlaridagi timing track bilan bir xil mantiq). Bubble markazidan
+# pastga TIMING_MARK_OFFSET masofada joylashadi.
+VARIANT_TIMING_MARK_OFFSET_MM = 3.6
+VARIANT_TIMING_MARK_SIZE_MM = TIMING_MARK_SIZE_MM  # 1.4 -- bir xil o'lcham
 
 # ============================================================
 # DATA MODELS
@@ -145,11 +176,8 @@ class SubjectBlock:
     point: float
 
     # True bo'lsa -- bu blok BIR NECHTA turli ball qiymatiga ega
-    # savollarni birlashtirgan (masalan bitta ustunda 1.1, 2.1 va 3.1
-    # ballli savollar aralash). Bunday holda `point` maydoni faqat
-    # BIRINCHI savolning ballini saqlaydi va ustunning boshida "X ball"
-    # yozuvini CHIZISH KERAK EMAS -- chunki u chalg'ituvchi/noto'g'ri
-    # bo'lar edi (draw_answer_column shu bayroqni tekshiradi).
+    # savollarni birlashtirgan. Bunday holda `point` ustun boshida
+    # ko'rsatilmaydi (draw_answer_column shu bayroqni tekshiradi).
     mixed_points: bool = False
 
     @property
@@ -169,23 +197,10 @@ class Exam:
     # 30, 45, 60 yoki 90
     total_questions: int
 
-    # USTUNLARGA bubble chizish uchun -- har bir ustun (1-30/31-60/61-90)
-    # uchun BITTA blok (agar bir ustunda bir nechta fan/ball aralash
-    # bo'lsa, ular shu yerda bitta blokka birlashtirilgan bo'lishi
-    # mumkin -- app/services/exam_service.py._build_subject_blocks'ga
-    # qarang).
     subjects: List[SubjectBlock] = field(
         default_factory=list
     )
 
-    # O'QUVCHI MA'LUMOTLARI qutisidagi "Fan / Oraliq / Soni / Ball / Jami"
-    # jadvali uchun -- HAR BIR fan/ball guruhi ALOHIDA qator sifatida.
-    # `subjects`dan farqli o'laroq bu yerda birlashtirish YO'Q, shuning
-    # uchun 30 ta savol 3 xil fandan iborat bo'lsa ham (masalan Majburiy
-    # fanlar 1.1 ball, Matematika 2.1 ball, Ingliz tili 3.1 ball -- har
-    # birida 10tadan), jadvalda 3 ta alohida qator ko'rinadi. Bo'sh
-    # qoldirilsa (masalan eski chaqiruvlar bilan moslik uchun),
-    # draw_student_info() `subjects`ni ishlatadi (fallback).
     subject_breakdown: List[SubjectBlock] = field(
         default_factory=list
     )
@@ -209,11 +224,20 @@ class Booklet:
 
     QR kod aynan shu booklet_id orqali
     o'quvchi va imtihon bilan bog'lanadi.
+
+    variant_number -- talabaga tayinlangan "TEST VARIANTI" (1..4,
+    ixtiyoriy). Javoblar varag'ida bu raqam OLDINDAN chizilmaydi --
+    talabaning o'zi tegishli bubble'ni bo'yab belgilaydi (savollar
+    kitobchasida shu raqam ko'rsatiladi va "shuni belgilang" deb
+    ko'rsatma beriladi). Shu sababli bu maydon hozircha faqat
+    ma'lumot uchun saqlanadi (kelajakda QR ichiga qo'shish kabi
+    ishlarga moslashuvchan bo'lishi uchun).
     """
 
     booklet_id: str
     exam_id: str
     student_id: str
+    variant_number: Optional[int] = None
 
 
 # ============================================================
@@ -357,15 +381,6 @@ def draw_dashed_line(
 def draw_registration_markers(c):
     """
     OpenCV perspective correction uchun 4 ta marker.
-
-    Markerlar:
-        top-left
-        top-right
-        bottom-left
-        bottom-right
-
-    Marker o'lchami REGISTRATION_MARKER_SIZE_MM orqali boshqariladi --
-    omr_reader.py dagi MARKER_SIZE_MM bilan bir xil bo'lishi shart.
     """
 
     marker_size = REGISTRATION_MARKER_SIZE_MM
@@ -404,10 +419,6 @@ def draw_timing_mark(
     """
     Kichik to'ldirilgan kvadrat -- reader bu qatorning HAQIQIY
     y-markazini shu belgidan topadi, arifmetik formuladan emas.
-
-    Har bir ustunda (subject_block bo'sh bo'lsa ham) MAX_ROWS ta
-    belgi chiziladi -- shu bilan reader tomonida qator indekslari
-    barcha ustunlarda bir xil qoladi.
     """
 
     c.setFillColor(BLACK)
@@ -433,9 +444,6 @@ def draw_bubble(
 ):
     """
     Bo'sh OMR bubble.
-
-    Diametri:
-        3.6 mm
     """
 
     c.setLineWidth(0.45)
@@ -616,20 +624,6 @@ def draw_student_info(
     student: Student,
     exam: Exam,
 ):
-    """
-    O'quvchi ma'lumotlari + imtihon bo'yicha
-    fanlar / savollar soni / ball taqsimoti.
-
-    MUHIM:
-        Barcha kontent shu funksiya ichida
-        belgilangan (left, top, width, height)
-        maydonidan HECH QACHON chiqmasligi kerak.
-
-        Fanlar soni ko'p yoki oz bo'lishidan
-        qat'iy nazar, jadval balandligi va shrift
-        o'lchami avtomatik moslashtiriladi.
-    """
-
     left = 11
     top = 35
 
@@ -646,15 +640,6 @@ def draw_student_info(
 
     inner_left = left + 3
     inner_right = left + width - 3
-
-    # ------------------------------------------------------
-    # Yuqori qism: sarlavha + ism-familiya + guruh
-    # (bular doim bir xil balandlikni egallaydi)
-    #
-    # Bu qism imkon qadar ixcham qilingan, shunda
-    # pastdagi jadvalga ko'proq joy (va shu bilan
-    # kattaroq shrift) qoladi.
-    # ------------------------------------------------------
 
     cursor_top = top + 4
 
@@ -692,7 +677,6 @@ def draw_student_info(
 
     cursor_top += 3.2
 
-    # Yuqori va pastki blok orasidagi ajratuvchi chiziq
     draw_line(
         c,
         inner_left,
@@ -705,29 +689,12 @@ def draw_student_info(
 
     cursor_top += 2.2
 
-    # ------------------------------------------------------
-    # Pastki qism: fanlar / savollar soni / ball jadvali
-    #
-    # Bu qism DINAMIK: nechta fan bo'lsa ham
-    # (1, 2 yoki 3 ta), qolgan bo'sh joy ichiga
-    # avtomatik sig'diriladi -- shrift esa mavjud
-    # joyga qarab imkon boricha KATTA qilinadi.
-    # ------------------------------------------------------
-
-    # MUHIM: bu yerda `exam.subjects` (ustunlarga bubble chizish uchun
-    # birlashtirilgan bloklar) EMAS, `exam.subject_breakdown` (har fan/ball
-    # guruhi alohida qator) ishlatiladi -- aks holda 30 talik testda 3 xil
-    # fan bitta blokka birlashtirilgani uchun jadvalda faqat 1 ta qator
-    # (va faqat birinchi fanning balli) chiqib qolar edi.
     subjects = exam._breakdown_or_subjects
 
     table_top = cursor_top
     table_bottom = top + height - 2
     available_height = table_bottom - table_top
 
-    # Jadval qatorlari: 1 ta sarlavha qatori
-    # + har bir fan uchun 1 qator
-    # + 1 ta "JAMI" qatori
     total_rows = len(subjects) + 2
 
     if total_rows <= 0 or available_height <= 0:
@@ -735,15 +702,9 @@ def draw_student_info(
 
     row_h = available_height / total_rows
 
-    # Qator balandligiga qarab shrift o'lchamini
-    # hisoblaymiz: joy ko'p bo'lsa -- shrift yiriklashadi,
-    # joy kam bo'lsa (fanlar ko'p bo'lsa) -- kichraydi.
-    # Yuqori chegara o'qish uchun qulay va ustunlarga
-    # sig'adigan darajada tanlangan.
     font_size = max(6.0, min(8.5, row_h * 1.55))
     header_font_size = max(5.2, min(7.0, font_size - 1.3))
 
-    # Ustunlar (mm, inner_left dan nisbiy emas -- absolyut x)
     col_subject_x = inner_left
     col_range_x = inner_left + 33
     col_count_x = inner_left + 49
@@ -764,7 +725,6 @@ def draw_student_info(
                 gray=gray_row,
             )
 
-    # Sarlavha qatori
     draw_row(
         0,
         [
@@ -779,13 +739,10 @@ def draw_student_info(
         gray_row=True,
     )
 
-    # Fan qatorlari
     for i, subject in enumerate(subjects):
 
         subject_name = subject.subject
 
-        # Nomi juda uzun bo'lsa, joy yetmay
-        # qolmasligi uchun qisqartiramiz.
         max_chars = 12
         if len(subject_name) > max_chars:
             subject_name = subject_name[: max_chars - 1] + "."
@@ -801,7 +758,6 @@ def draw_student_info(
             ],
         )
 
-    # JAMI (umumiy) qatori
     total_questions = sum(s.question_count for s in subjects)
     total_score = exam.total_possible_score
 
@@ -817,7 +773,6 @@ def draw_student_info(
         bold=True,
     )
 
-    # Jadval ustidan ingichka ajratuvchi chiziq (sarlavha ostida)
     header_bottom = table_top + row_h
     draw_line(
         c,
@@ -927,17 +882,17 @@ def draw_qr_box(
 
 
 # ============================================================
-# INSTRUCTIONS
+# INSTRUCTIONS (endi ORQA butun kenglikni EGALLAMAYDI --
+# o'ng tomonda TEST VARIANTI bubble maydoni uchun joy qoldiriladi)
 # ============================================================
 
 def draw_instructions(
     c,
 ):
-    left = 11
-    top = 83
-
-    width = 188
-    height = 25
+    left = INSTRUCTIONS_LEFT_MM
+    top = INSTRUCTIONS_TOP_MM
+    width = INSTRUCTIONS_WIDTH_MM
+    height = INSTRUCTIONS_HEIGHT_MM
 
     draw_box(
         c,
@@ -952,74 +907,57 @@ def draw_instructions(
         left + 3,
         top + 5,
         "JAVOBLARNI BELGILASH QOIDALARI",
-        size=6.5,
+        size=6.3,
         bold=True,
         gray=True,
     )
 
-    draw_text(
-        c,
-        left + 3,
-        top + 11,
+    lines = [
         "1. Faqat bitta javobni belgilang.",
-        size=6.3,
-    )
-
-    draw_text(
-        c,
-        left + 3,
-        top + 17,
         "2. Bubble ichini to'liq va aniq bo'yang.",
-        size=6.3,
-    )
+        "3. Ikki yoki undan ortiq belgi - xato hisoblanadi.",
+        "4. Varaqani buklamang, yirtmang, QR/markerlarni yopmang.",
+    ]
+
+    ly = top + 9.8
+    for line in lines:
+        draw_text(c, left + 3, ly, line, size=5.7)
+        ly += 3.7
+
+
+# ============================================================
+# TEST VARIANTI BELGILASH MAYDONI (YANGI)
+# ============================================================
+
+def draw_variant_marking(c):
+    left = VARIANT_BOX_LEFT_MM
+    top = VARIANT_BOX_TOP_MM
+    width = VARIANT_BOX_WIDTH_MM
+    height = VARIANT_BOX_HEIGHT_MM
+
+    draw_box(c, left, top, width, height)
 
     draw_text(
-        c,
-        left + 65,
-        top + 11,
-        "3. Ikki yoki undan ortiq belgi noto'g'ri/noaniq javob hisoblanishi mumkin.",
-        size=6.3,
+        c, left + width / 2, top + 5, "TEST VARIANTI",
+        size=6.3, bold=True, center=True, gray=True,
     )
-
     draw_text(
-        c,
-        left + 65,
-        top + 17,
-        "4. Varaqani buklamang, yirtmang va QR/markerlarni yopmang.",
-        size=6.3,
+        c, left + width / 2, top + 9.3, "(kitobchadagi raqamni belgilang)",
+        size=5.0, center=True, gray=True,
     )
 
-    # Demo
-    draw_filled_bubble(
-        c,
-        left + 165,
-        top + 10,
-        radius_mm=1.7
-    )
+    labels = ["1", "2", "3", "4"]
+    label_y = VARIANT_BUBBLE_Y_MM - 5.5
 
-    draw_text(
-        c,
-        left + 170,
-        top + 11,
-        "To'g'ri",
-        size=6,
-    )
-
-    draw_bubble(
-        c,
-        left + 165,
-        top + 17,
-        radius_mm=1.7
-    )
-
-    draw_text(
-        c,
-        left + 170,
-        top + 18,
-        "Bo'sh", 
-        size=6,
-    )
-
+    for label, cx in zip(labels, VARIANT_BUBBLE_XS_MM):
+        draw_text(c, cx, label_y, label, size=6.5, bold=True, center=True)
+        draw_bubble(c, cx, VARIANT_BUBBLE_Y_MM, radius_mm=VARIANT_BUBBLE_RADIUS_MM)
+        # YANGI: reader shu belgidan bubble qatorining haqiqiy y-markazini
+        # (va keyin Hough orqali x-markazini) topadi.
+        draw_timing_mark(
+            c, cx, VARIANT_BUBBLE_Y_MM + VARIANT_TIMING_MARK_OFFSET_MM,
+            size_mm=VARIANT_TIMING_MARK_SIZE_MM,
+        )
 
 # ============================================================
 # ANSWER COLUMN
@@ -1034,16 +972,6 @@ def draw_answer_column(
     subject_block: Optional[SubjectBlock],
     max_rows: int = 30,
 ):
-    """
-    Bitta 30 savollik OMR ustuni.
-
-    MUHIM (timing track): ustun BO'SH (subject_block is None) bo'lsa
-    ham, timing marklar chiziladi -- chunki reader tomonida ustunlar
-    orasidagi qator indekslash BARCHA ustunlarda bir xil bo'lishi
-    kerak (aks holda find_timing_marks() ustun bo'yicha turlicha
-    sondagi belgi topib, mos kelmay qoladi).
-    """
-
     draw_box(
         c,
         left_mm,
@@ -1052,14 +980,9 @@ def draw_answer_column(
         height_mm
     )
 
-    # Table settings (BO'SH ustunda ham ishlatiladi -- timing track
-    # header_h dan boshlanadi, xuddi to'ldirilgan ustundagi kabi)
     header_h = 18
     row_h = 4.25
 
-    # Timing track -- har bir qator uchun, subject_block bor-yo'qligidan
-    # qat'i nazar. Bu reader'ga arifmetik formulaga tayanmasdan
-    # HAQIQIY qator y-markazini berish imkonini beradi.
     for i in range(max_rows):
         row_top = top_mm + header_h + i * row_h
         draw_timing_mark(
@@ -1093,9 +1016,6 @@ def draw_answer_column(
 
         return
 
-    # Header -- MUHIM: savol oralig'i ("1-30") endi ko'rsatilmaydi,
-    # chunki bitta ustun har doim boshidan to'liq to'ldiriladi va
-    # alohida oraliq yozuvi keraksiz/chalg'ituvchi edi.
     draw_text(
         c,
         left_mm + width_mm / 2,
@@ -1106,12 +1026,6 @@ def draw_answer_column(
         center=True,
     )
 
-    # Ball faqat BLOKDAGI BARCHA savollar BIR XIL ballga ega bo'lsa
-    # ko'rsatiladi. Aks holda (mixed_points=True -- masalan bitta
-    # ustunda 1.1/2.1/3.1 aralash) bu yozuv chiqarilmaydi, chunki
-    # bitta raqam butun ustun "shu ballga ega" degan noto'g'ri
-    # taassurot qoldirar edi -- haqiqiy ball har bir savolning o'z
-    # `ball` maydonidan (DB'dan) olinadi va baholash shu asosda ishlaydi.
     if not subject_block.mixed_points:
         draw_text(
             c,
@@ -1132,7 +1046,6 @@ def draw_answer_column(
         left_mm + 37,
     ]
 
-    # Letters
     letters = ["A", "B", "C", "D"]
 
     for letter, lx in zip(letters, answer_x):
@@ -1147,7 +1060,6 @@ def draw_answer_column(
             gray=True,
         )
 
-    # Question rows
     for i in range(max_rows):
 
         question_number = subject_block.start + i
@@ -1160,12 +1072,9 @@ def draw_answer_column(
 
         center_y = row_top + row_h / 2
 
-        # Agar bu blok 30 dan kam savolga ega bo'lsa,
-        # qolgan joy bo'sh qoladi.
         if question_number > subject_block.end:
             continue
 
-        # Question number
         draw_text(
             c,
             question_x,
@@ -1176,7 +1085,6 @@ def draw_answer_column(
             center=True,
         )
 
-        # Bubbles
         for bubble_x in answer_x:
 
             draw_bubble(
@@ -1186,7 +1094,6 @@ def draw_answer_column(
                 radius_mm=1.75
             )
 
-        # Row separator
         if i < max_rows - 1:
 
             draw_line(
@@ -1207,20 +1114,6 @@ def draw_answer_column(
 def distribute_subjects(
     exam: Exam,
 ) -> List[Optional[SubjectBlock]]:
-    """
-    Fan bloklarini 3 ta ustunga joylashtiradi.
-
-    Masalan:
-
-    30 savol:
-        [Tarix 1-30, None, None]
-
-    60 savol:
-        [Tarix 1-30, Matematika 31-60, None]
-
-    90 savol:
-        [Tarix 1-30, Matematika 31-60, Fizika 61-90]
-    """
 
     columns = [
         None,
@@ -1341,37 +1234,31 @@ def generate_answer_sheet(
         pagesize=A4
     )
 
-    # 1. Registration markers
     draw_registration_markers(c)
 
-    # 2. Header
     draw_header(
         c,
         exam=exam,
         brand_name=brand_name
     )
 
-    # 3. Student info (+ fanlar / ball / savollar soni)
     draw_student_info(
         c,
         student=student,
         exam=exam,
     )
 
-    # 4. QR
     draw_qr_box(
         c,
         exam=exam,
         booklet=booklet
     )
 
-    # 5. Instructions
     draw_instructions(c)
+    draw_variant_marking(c)
 
-    # 6. Subject columns
     columns = distribute_subjects(exam)
 
-    # Answer area
     column_lefts = [
         11,
         56,
@@ -1395,7 +1282,6 @@ def generate_answer_sheet(
             max_rows=30,
         )
 
-    # 7. Supervisor / student signature area
     draw_box(
         c,
         146,
@@ -1480,13 +1366,11 @@ def generate_answer_sheet(
 
         field_top += 17
 
-    # 8. Footer
     draw_footer(
         c,
         brand_name
     )
 
-    # Finish
     c.showPage()
     c.save()
 
@@ -1499,10 +1383,6 @@ def generate_answer_sheet(
 
 if __name__ == "__main__":
 
-    # ----------------------------------------
-    # Student
-    # ----------------------------------------
-
     student = Student(
         id="STU-001",
         first_name="Nilufar",
@@ -1511,52 +1391,24 @@ if __name__ == "__main__":
         group_name="10-A",
     )
 
-    # ----------------------------------------
-    # Exam
-    # ----------------------------------------
-
     exam = Exam(
         exam_id="EX-2026-0417",
         exam_name="Yakuniy nazorat testi",
         total_questions=90,
 
         subjects=[
-            SubjectBlock(
-                start=1,
-                end=30,
-                subject="Tarix",
-                point=1.1,
-            ),
-
-            SubjectBlock(
-                start=31,
-                end=60,
-                subject="Matematika",
-                point=1.1,
-            ),
-
-            SubjectBlock(
-                start=61,
-                end=90,
-                subject="Fizika",
-                point=2.1,
-            ),
+            SubjectBlock(start=1, end=30, subject="Tarix", point=1.1),
+            SubjectBlock(start=31, end=60, subject="Matematika", point=1.1),
+            SubjectBlock(start=61, end=90, subject="Fizika", point=2.1),
         ],
     )
-
-    # ----------------------------------------
-    # Booklet
-    # ----------------------------------------
 
     booklet = Booklet(
         booklet_id="3817294",
         exam_id=exam.exam_id,
         student_id=student.id,
+        variant_number=2,
     )
-
-    # ----------------------------------------
-    # Generate
-    # ----------------------------------------
 
     output_file = generate_answer_sheet(
         output_path="output/javoblar_varaqasi.pdf",

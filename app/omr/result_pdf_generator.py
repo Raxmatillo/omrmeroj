@@ -80,7 +80,8 @@ QUESTION_GROUPS = [(1, 30), (31, 60), (61, 90)]
 # ------------------------------------------------------------------
 
 _SYMBOL_FONT = "Helvetica-Bold"
-_SYMBOLS = {"correct": "V", "incorrect": "X", "blank": "-", "ambiguous": "!"}
+_SYMBOLS = {"correct": "V", "incorrect": "X"}  # ASCII fallback
+
 
 _DEJAVU_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -93,23 +94,20 @@ for _path in _DEJAVU_CANDIDATES:
         try:
             pdfmetrics.registerFont(TTFont("DejaVuSans-Bold", _path))
             _SYMBOL_FONT = "DejaVuSans-Bold"
-            _SYMBOLS = {"correct": "\u2713", "incorrect": "\u2715", "blank": "\u2014", "ambiguous": "\u26A0"}
+            _SYMBOLS = {"correct": "\u2713", "incorrect": "\u2715"}  # ✓ / ✕
             break
-        except Exception:  # noqa: BLE001 -- shrift yuklanmasa, ASCII fallback bilan davom etamiz
+        except Exception:
             pass
 
 
+
 def _status_symbol(status: str) -> str:
-    return _SYMBOLS.get(status, "?")
+    # blank ham, ambiguous (noaniq) ham -- endi "xato" guruhida
+    return _SYMBOLS["correct"] if status == "correct" else _SYMBOLS["incorrect"]
 
 
 def _status_color(status: str):
-    return {
-        "correct": CORRECT_COLOR,
-        "incorrect": INCORRECT_COLOR,
-        "blank": BLANK_COLOR,
-        "ambiguous": AMBIGUOUS_COLOR,
-    }.get(status, BLACK)
+    return CORRECT_COLOR if status == "correct" else INCORRECT_COLOR
 
 
 def _score_band_color(total_score: float):
@@ -251,27 +249,30 @@ def generate_result_pdf(
 
     # ---------------- Chap: skanerlangan varaq / O'ng: 3 ustun natija ----------------
     content_top = 56
-    left_w = 78
+    left_w = 105          # 78 -> 105 (skan rasmi uchun ko'proq joy)
     right_left = 11 + left_w + 6
     right_w = 199 - right_left
+    box_h = 175
 
-    _box(c, 11, content_top, left_w, 175)
+
+    _box(c, 11, content_top, left_w, box_h)
     if scanned_image_path and Path(scanned_image_path).exists():
         try:
             img = ImageReader(scanned_image_path)
             iw, ih = img.getSize()
-            # A4 rasm proporsiyasiga moslab, box ichiga sig'diramiz
-            box_w_pt, box_h_pt = (left_w - 4) * mm, (175 - 4) * mm
+            box_w_pt, box_h_pt = (left_w - 4) * mm, (box_h - 4) * mm
             scale = min(box_w_pt / iw, box_h_pt / ih)
             draw_w, draw_h = iw * scale, ih * scale
             offset_x = (box_w_pt - draw_w) / 2
-            c.drawImage(img, _x(11 + 2) + offset_x, _y(content_top) - 2 * mm - draw_h,
+            offset_y = (box_h_pt - draw_h) / 2   # YANGI: vertikal markazlash
+            c.drawImage(img, _x(11 + 2) + offset_x,
+                        _y(content_top) - 2 * mm - offset_y - draw_h,
                         width=draw_w, height=draw_h, preserveAspectRatio=True, mask="auto")
         except Exception:  # noqa: BLE001
-            _text(c, 11 + left_w / 2, content_top + 85, "Rasm mavjud emas", center=True,
-                  color=MEDIUM_GRAY)
+            _text(c, 11 + left_w / 2, content_top + box_h / 2, "Rasm mavjud emas",
+                  center=True, color=MEDIUM_GRAY)
     else:
-        _text(c, 11 + left_w / 2, content_top + 85, "Skanerlangan rasm mavjud emas",
+        _text(c, 11 + left_w / 2, content_top + box_h / 2, "Skanerlangan rasm mavjud emas",
               center=True, color=MEDIUM_GRAY)
 
     _draw_answer_columns(
@@ -298,10 +299,6 @@ def generate_result_pdf(
 
 
 def _draw_answer_columns(c, left_mm, top_mm, w_mm, h_mm, total_questions, raw_answers, answer_key):
-    """O'ng tomondagi 3 ustunli (1-30 / 31-60 / 61-90) natija ro'yxati,
-    faqat total_questions doirasidagi ustunlar chiziladi (universal 90
-    savollik shablon -- TZ 8-bo'lim)."""
-
     _box(c, left_mm, top_mm, w_mm, h_mm)
 
     active_groups = [(s, e) for (s, e) in QUESTION_GROUPS if s <= total_questions]
@@ -311,7 +308,9 @@ def _draw_answer_columns(c, left_mm, top_mm, w_mm, h_mm, total_questions, raw_an
     col_count = len(active_groups)
     col_w = w_mm / col_count
     row_h = 5.4
-    pad = 3
+    pad = 2.2
+    # 3 ustunli (90 savol) holatda joy tor bo'lgani uchun shrift kichikroq
+    font_size = 8.3 if col_count <= 2 else 7.2
 
     for col_idx, (start, end) in enumerate(active_groups):
         col_left = left_mm + col_idx * col_w
@@ -334,9 +333,9 @@ def _draw_answer_columns(c, left_mm, top_mm, w_mm, h_mm, total_questions, raw_an
 
             row_top = cur_top + (q - start) * row_h
             label = f"{q}." if shown == "" else f"{q}. {shown}"
-            _text(c, col_left + pad, row_top, label, size=8.3)
-            _text(c, col_left + col_w - pad - 4, row_top, _status_symbol(status),
-                  size=8.3, bold=True, color=_status_color(status), font=_SYMBOL_FONT)
+            _text(c, col_left + pad, row_top, label, size=font_size)
+            _text(c, col_left + col_w - pad - 3.5, row_top, _status_symbol(status),
+                  size=font_size, bold=True, color=_status_color(status), font=_SYMBOL_FONT)
 
         if col_idx < col_count - 1:
             _line(c, col_left + col_w, top_mm + 1, col_left + col_w, top_mm + h_mm - 1)

@@ -66,13 +66,24 @@ def _parse_booklet_id(sheet_id_raw: str | None) -> str:
 
 
 def _save_scanned_preview(warped_image, result_id: str) -> str:
-    """Tekislangan (perspective-corrected) skan rasmini natija PDF'iga
-    joylash uchun diskka saqlaydi. Bu -- natija PDF'ning chap tomonidagi
-    "skanerlangan answer sheet" qismi uchun manba."""
+    """Natija PDF ichida rasm ekranda hech qachon ~105mm dan katta
+    ko'rsatilmaydi -- shuning uchun to'liq 300dpi (~2480x3508px) PNG
+    saqlash faqat fayl hajmini shishiradi (5-8 MB). Shu sababli: eni
+    max 1400px gacha kichraytiriladi va PNG o'rniga JPEG (sifat=82)
+    formatida saqlanadi -- ko'zga sezilarli sifat yo'qotmasdan
+    5-10 marta kichikroq fayl beradi."""
     out_dir = Path(settings.OUTPUT_DIR) / "result_scans"
     out_dir.mkdir(parents=True, exist_ok=True)
-    path = out_dir / f"{result_id}.png"
-    cv2.imwrite(str(path), warped_image)
+    path = out_dir / f"{result_id}.jpg"
+
+    preview = warped_image
+    max_width_px = 1400
+    h, w = preview.shape[:2]
+    if w > max_width_px:
+        scale = max_width_px / w
+        preview = cv2.resize(preview, (max_width_px, int(h * scale)), interpolation=cv2.INTER_AREA)
+
+    cv2.imwrite(str(path), preview, [cv2.IMWRITE_JPEG_QUALITY, 82])
     return str(path)
 
 
@@ -134,10 +145,21 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
             raw_answers[key] = None
         elif q.status == "uncertain":
             raw_answers[key] = "MULTI"
-        else:  # "marked"
+        else:
             raw_answers[key] = q.answer
 
+    # YANGI: TEST VARIANTI tekshiruvi. exam_student.paper_variant_number
+    # None bo'lsa (bu imtihonda variant ishlatilmagan) -- tekshirilmaydi.
+    detected_variant = report.get("detected_paper_variant")
+    variant_status = report.get("paper_variant_status")
+    expected_variant = exam_student.paper_variant_number
+
+    variant_mismatch = False
+    if expected_variant is not None:
+        variant_mismatch = (variant_status != "marked") or (detected_variant != expected_variant)
+
     correct = incorrect = blank = ambiguous = 0
+
     per_subject: dict[str, dict] = {}
     total_score = 0.0
 
@@ -162,7 +184,11 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
         else:
             incorrect += 1
 
-    status = models.ResultStatus.needs_review if ambiguous > 0 else models.ResultStatus.ok
+    status = (
+        models.ResultStatus.needs_review
+        if (ambiguous > 0 or variant_mismatch)
+        else models.ResultStatus.ok
+    )
 
     result = models.Result(
         exam_student_id=exam_student.id,
@@ -173,6 +199,8 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
         ambiguous_count=ambiguous,
         total_score=total_score,
         per_subject_json=per_subject,
+        detected_paper_variant=detected_variant,   # YANGI
+        variant_mismatch=variant_mismatch,         # YANGI
         status=status,
     )
     db.add(result)

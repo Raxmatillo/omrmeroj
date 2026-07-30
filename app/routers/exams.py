@@ -22,7 +22,10 @@ def _get_owned_exam(exam_id: str, user: models.User, db: Session) -> models.Exam
 def create_exam_endpoint(payload: schemas.ExamCreateIn, user: models.User = Depends(require_teacher),
                           db: Session = Depends(get_db)):
     try:
-        return create_exam(db, teacher=user, group_id=payload.group_id, test_set_id=payload.test_set_id)
+        return create_exam(
+            db, teacher=user, group_id=payload.group_id, test_set_id=payload.test_set_id,
+            paper_variant_count=payload.paper_variant_count,
+        )
     except ExamServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

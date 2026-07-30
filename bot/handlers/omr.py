@@ -77,6 +77,14 @@ async def _process_answer_sheet(message: Message, file_id: str, filename_hint: s
             if result.status == models.ResultStatus.needs_review
             else ""
         )
+        if result.variant_mismatch:
+            expected = exam_student.paper_variant_number
+            got = result.detected_paper_variant
+            review_note += (
+                f"\n\u26A0\uFE0F TEST VARIANTI mos kelmadi: kutilgan {expected}, "
+                f"belgilangan {got if got else 'belgilanmagan'}. Bu boshqa talabaning "
+                f"javob varag'i bo'lishi mumkin -- tekshiring."
+            )
 
         await status_msg.edit_text(
             "Natija tayyor!\n\n"

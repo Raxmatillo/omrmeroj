@@ -130,6 +130,17 @@ PDF_EXTENSIONS = {".pdf"}
 # lekin ogohlantirish bilan).
 BLUR_VARIANCE_THRESHOLD = 60.0
 
+# ============================================================
+# TEST VARIANTI bubble maydoni -- app/omr/answer_sheet_generator.py
+# dagi bir xil nomdagi konstantalar bilan ANIQ BIR XIL bo'lishi SHART.
+# ============================================================
+VARIANT_BUBBLE_XS_MM = [133.0, 151.0, 169.0, 187.0]
+VARIANT_BUBBLE_Y_MM = 102.0
+VARIANT_BUBBLE_RADIUS_MM = 2.2
+VARIANT_TIMING_MARK_OFFSET_MM = 3.6
+VARIANT_TIMING_MARK_SIZE_MM = 1.4
+MAX_PAPER_VARIANTS = len(VARIANT_BUBBLE_XS_MM)  # 4
+
 
 # ============================================================
 # NATIJA MODELLARI
@@ -819,6 +830,95 @@ def detect_question(
         centers_px=list(centers_px),
     )
 
+def find_variant_timing_marks(binary: np.ndarray) -> Optional[List[float]]:
+    """
+    TEST VARIANTI qatoridagi 4 ta timing mark (har bir bubble ostida)
+    ning HAQIQIY x-markazlarini topadi -- find_timing_marks() bilan bir
+    xil mantiq, lekin vertikal ustun o'rniga bitta GORIZONTAL qator uchun.
+
+    Muvaffaqiyatli bo'lsa: chapdan o'ngga saralangan 4 ta x_px qaytaradi.
+    Aniq 4 ta belgi topilmasa -- None (chaqiruvchi arifmetik formulaga
+    xavfsiz qaytadi).
+    """
+    predicted_y_px = (VARIANT_BUBBLE_Y_MM + VARIANT_TIMING_MARK_OFFSET_MM) * PX_PER_MM
+    mark_size_px = VARIANT_TIMING_MARK_SIZE_MM * PX_PER_MM
+
+    x1 = int((min(VARIANT_BUBBLE_XS_MM) - 5) * PX_PER_MM)
+    x2 = int((max(VARIANT_BUBBLE_XS_MM) + 5) * PX_PER_MM)
+    y1 = max(0, int(predicted_y_px - mark_size_px * 2))
+    y2 = int(predicted_y_px + mark_size_px * 2)
+
+    if x2 <= x1 or y2 <= y1 or y2 > binary.shape[0] or x2 > binary.shape[1]:
+        return None
+
+    strip = binary[y1:y2, x1:x2]
+    contours, _ = cv2.findContours(strip, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    min_area = (mark_size_px * 0.45) ** 2
+    max_area = (mark_size_px * 3.0) ** 2
+
+    centers_x = []
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < min_area or area > max_area:
+            continue
+        M = cv2.moments(cnt)
+        if M["m00"] == 0:
+            continue
+        centers_x.append(M["m10"] / M["m00"] + x1)
+
+    if len(centers_x) != MAX_PAPER_VARIANTS:
+        return None
+
+    centers_x.sort()
+    return centers_x
+
+
+@dataclass
+class VariantDetectionResult:
+    variant_number: Optional[int]   # 1..4, aniqlangan bo'lsa
+    status: str                     # "blank" | "marked" | "uncertain"
+    options: List[OptionResult]
+
+
+def detect_paper_variant(gray: np.ndarray, binary: np.ndarray) -> VariantDetectionResult:
+    """
+    TEST VARIANTI qatoridagi 4 ta bubble'dan qaysi biri belgilanganini
+    aniqlaydi. Talaba variant belgilamagan (yoki bu imtihonda variant
+    umuman ishlatilmagan) bo'lsa -- status="blank", variant_number=None
+    qaytadi. Bu XATO EMAS: chaqiruvchi (omr_service.py) tomonida
+    ExamStudent.paper_variant_number None bo'lsa, solishtirish umuman
+    o'tkazib yuboriladi.
+    """
+    radius_px = VARIANT_BUBBLE_RADIUS_MM * PX_PER_MM
+
+    timing_xs = find_variant_timing_marks(binary)
+    if timing_xs is not None:
+        predicted_xs_px = [int(round(cx)) for cx in timing_xs]
+    else:
+        predicted_xs_px = [int(round(cx * PX_PER_MM)) for cx in VARIANT_BUBBLE_XS_MM]
+
+    y_center_px = int(round(VARIANT_BUBBLE_Y_MM * PX_PER_MM))
+    centers = refine_bubble_centers_in_row(gray, y_center_px, predicted_xs_px, radius_px)
+
+    options: List[OptionResult] = []
+    for label, (cx, cy) in zip(["1", "2", "3", "4"], centers):
+        options.append(OptionResult(letter=label, fill_percentage=get_fill_percentage(binary, cx, cy, radius_px)))
+
+    ranked = sorted(options, key=lambda o: o.fill_percentage, reverse=True)
+    best, second = ranked[0], ranked[1]
+    margin = best.fill_percentage - second.fill_percentage
+
+    blank_threshold, marked_threshold, min_margin = 15.0, 32.0, 8.0
+
+    if best.fill_percentage < blank_threshold:
+        return VariantDetectionResult(None, "blank", options)
+    if margin < min_margin:
+        if best.fill_percentage < marked_threshold:
+            return VariantDetectionResult(None, "blank", options)
+        return VariantDetectionResult(int(best.letter), "uncertain", options)
+    status = "marked" if best.fill_percentage >= marked_threshold else "uncertain"
+    return VariantDetectionResult(int(best.letter), status, options)
 
 # ============================================================
 # BUTUN JAVOB VARAQASINI O'QISH
@@ -1019,13 +1119,11 @@ def detect_answer_sheet(image_path) -> dict:
         print("SIFAT OGOHLANTIRISHI:", w)
 
     radius_px = BUBBLE_RADIUS_MM * PX_PER_MM
-
     results: List[QuestionResult] = []
-
     for column_index in range(len(QUESTION_GROUPS)):
-        results.extend(
-            _detect_column_questions(gray, binary, column_index, radius_px)
-        )
+        results.extend(_detect_column_questions(gray, binary, column_index, radius_px))
+
+    variant_result = detect_paper_variant(gray, binary)   # YANGI
 
     marked = [r for r in results if r.status == "marked"]
     uncertain = [r for r in results if r.status == "uncertain"]
@@ -1040,6 +1138,8 @@ def detect_answer_sheet(image_path) -> dict:
         "marked_percentage": round(len(marked) / len(results) * 100, 2),
         "quality_warnings": quality_warnings,
         "questions": results,
+        "detected_paper_variant": variant_result.variant_number,   # YANGI
+        "paper_variant_status": variant_result.status,             # YANGI
         "warped_image": warped,
         "binary_image": binary,
     }

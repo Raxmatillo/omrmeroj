@@ -153,6 +153,11 @@ class TestSetOut(TestSetIn):
 class ExamCreateIn(BaseModel):
     group_id: str
     test_set_id: str
+    # Nechta TEST VARIANTI (1..4) ishlatilishi -- app/omr/answer_sheet_generator.py
+    # dagi MAX_PAPER_VARIANTS bilan chegaralangan. 1 bo'lsa -- hammaga bir xil
+    # (variant belgilash shart emas, booklet_html_generator variant_number=None
+    # bo'lganda variant box'ni umuman chizmaydi).
+    paper_variant_count: int = Field(default=1, ge=1, le=4)
 
 
 class ExamOut(BaseModel):
