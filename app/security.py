@@ -50,3 +50,40 @@ def hash_code(code: str) -> str:
 
 def verify_code_hash(code: str, code_hash: str) -> bool:
     return pwd_context.verify(code, code_hash)
+
+
+# ---------------------------------------------------------------------------
+# Signed/expiring fayl havolalari (masalan natija PDF'ining QR kodi)
+#
+# TZ 29-bo'lim: "Generated files public URL orqali ochilmasin". Shu bilan
+# birga natija PDF'ida QR kod bo'lishi kerak (havola sifatida). Bu ikkisini
+# muvofiqlashtirish uchun: QR ichiga ochiq/doimiy URL emas, balki MUDDATI
+# TUGAYDIGAN va faqat bitta resursga (result_id) tegishli bo'lgan imzolangan
+# token qo'yiladi. Token muddati tugagach havola ishlamay qoladi -- bu ham
+# xavfsizlik, ham "havola sifatida ishlatish" talabini qondiradi.
+# ---------------------------------------------------------------------------
+
+FILE_ACCESS_PURPOSE = "file_access"
+
+
+def create_file_access_token(resource_id: str, days: int = 30) -> str:
+    """`resource_id` (masalan Result.id) uchun muddati tugaydigan token
+    yaratadi. Standart 30 kun -- agar fayl saqlash siyosati boshqacha
+    bo'lsa (masalan generated files 7 kunda o'chirilsa), shu qiymatni
+    moslashtiring."""
+    expire = datetime.utcnow() + timedelta(days=days)
+    payload = {"rid": resource_id, "purpose": FILE_ACCESS_PURPOSE, "exp": expire}
+    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def decode_file_access_token(token: str) -> str | None:
+    """Token amal qilayotgan bo'lsa resource_id (masalan result_id)ni
+    qaytaradi, aks holda None (muddati tugagan / soxta / boshqa maqsad
+    uchun yaratilgan token)."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        return None
+    if payload.get("purpose") != FILE_ACCESS_PURPOSE:
+        return None
+    return payload.get("rid")

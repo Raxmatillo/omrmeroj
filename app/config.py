@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     OUTPUT_DIR: str = "./generated_files"
     UPLOAD_DIR: str = "./uploads"
 
+    # Natija PDF QR kodiga qo'yiladigan signed havolaning to'liq domeni
+    # (masalan "https://api.your-domain.com"). Bo'sh bo'lsa, havola
+    # nisbiy yo'l sifatida qoladi (dev/lokal test uchun yetarli, lekin
+    # QR haqiqiy telefon kamerasi bilan ochilishi uchun productionda
+    # to'liq domen kerak).
+    PUBLIC_BASE_URL: str = ""
+
     # --- Telegram bot orqali login (telefon + bir martalik kod) ---
     # Botni @BotFather'dan olingan token. Bo'sh bo'lsa /auth/request-code
     # va bot process ishlamaydi.
@@ -44,13 +51,13 @@ class Settings(BaseSettings):
     PHONE_MIN_LENGTH: int = 9  # Operator kodisiz raqam uzunligi
     PHONE_MAX_LENGTH: int = 9
     PHONE_ALLOWED_OPERATORS: str = "90,91,93,94,95,97,98,99,33,88,77,55,50"
-    
+
     @property
     def phone_operators_list(self) -> List[str]:
         """Operator kodlarini listga o'giradi"""
         return [op.strip() for op in self.PHONE_ALLOWED_OPERATORS.split(",")]
-    
-    # 📌 FAQAT bittasini ishlating: SettingsConfigDict (yangicha usul)
+
+    # FAQAT bittasini ishlating: SettingsConfigDict (yangicha usul)
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
