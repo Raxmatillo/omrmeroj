@@ -200,7 +200,10 @@ def generate_result_pdf(
     per_subject: Dict[str, dict],
     scanned_image_path: Optional[str] = None,
     download_url: Optional[str] = None,
-    brand_name: str = "BRAND NAME",
+    brand_name: str = "ME'ROJ",
+    variant_label: Optional[str] = None,   # <-- YANGI
+
+
 ) -> str:
     """
     raw_answers  -- {str(tartib): "A"|None|"MULTI"} (omr_service.py
@@ -231,6 +234,8 @@ def generate_result_pdf(
     _text(c, info_left + info_w / 2, info_top + 11, student_full_name.upper(),
           size=13, bold=True, center=True)
     sub_line = f"Guruh: {group_name}    |    {exam_name}"
+    if variant_label:
+        sub_line += f"    |    Variant: {variant_label}"
     _text(c, info_left + info_w / 2, info_top + 18, sub_line, size=8.5,
           center=True, color=MEDIUM_GRAY)
     _text(c, info_left + info_w / 2, info_top + 23.5, f"Umumiy bali: {total_score:g}",

@@ -1216,7 +1216,7 @@ def generate_answer_sheet(
     student: Student,
     exam: Exam,
     booklet: Booklet,
-    brand_name: str = "BRAND NAME",
+    brand_name: str = "ME'ROJ",
 ):
     """
     Javoblar varaqasini PDF qilib yaratadi.
@@ -1415,7 +1415,7 @@ if __name__ == "__main__":
         student=student,
         exam=exam,
         booklet=booklet,
-        brand_name="SAFAR TEST",
+        brand_name="ME'ROJ",
     )
 
     print(

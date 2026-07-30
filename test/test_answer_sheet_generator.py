@@ -1415,7 +1415,7 @@ if __name__ == "__main__":
         student=student,
         exam=exam,
         booklet=booklet,
-        brand_name="SAFAR TEST",
+        brand_name="ME'ROJ",
     )
 
     print(

@@ -130,8 +130,10 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
     )
     if not exam_student:
         raise OmrError(f"Booklet ID topilmadi: {booklet_id}")
+        # YANGI KOD:
     if exam_student.result is not None:
-        raise OmrError("Bu javob varag'i allaqachon tekshirilgan")
+        db.delete(exam_student.result)
+        db.flush()
 
     # generate_question_booklet.build() / randomization.build_shuffled_booklet()
     # answer_key_json'ni shu formatda yozadi:
@@ -154,9 +156,16 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
     variant_status = report.get("paper_variant_status")
     expected_variant = exam_student.paper_variant_number
 
+
+    # YANGI
     variant_mismatch = False
     if expected_variant is not None:
-        variant_mismatch = (variant_status != "marked") or (detected_variant != expected_variant)
+        # Faqat RAQAM boshqacha chiqsa yoki umuman belgilanmagan bo'lsa --
+        # "boshqa talaba varag'i" degan jiddiy ogohlantirish beriladi.
+        # Raqam to'g'ri topilgan bo'lsa, bo'yash biroz noaniq bo'lsa ham
+        # bu mismatch emas (chalkash xabar bermaslik uchun).
+        variant_mismatch = (detected_variant is None) or (detected_variant != expected_variant)
+        
 
     correct = incorrect = blank = ambiguous = 0
 
@@ -224,6 +233,8 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
         if exam_student.variant and exam_student.variant.test_set:
             exam_name = exam_student.variant.test_set.name
 
+        variant_label = exam_student.variant.label if exam_student.variant else None   # <-- YANGI
+
         pdf_path = Path(settings.OUTPUT_DIR) / "results" / f"{result.id}.pdf"
         generate_result_pdf(
             output_path=str(pdf_path),
@@ -238,11 +249,109 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
             per_subject=per_subject,
             scanned_image_path=scanned_path,
             download_url=download_url,
+            variant_label=variant_label,   # <-- YANGI
         )
         result.result_pdf_path = str(pdf_path)
         db.commit()
         db.refresh(result)
     except Exception:  # noqa: BLE001
         logger.exception("Natija PDF generatsiyasida xato -- Result baribir saqlandi")
+
+    return result
+
+def apply_manual_corrections(db: Session, result: models.Result, corrections: dict[str, str | None]) -> models.Result:
+    """
+    corrections -- {"15": "A", "24": None, ...}: savol raqami (string) ->
+    o'qituvchi qo'lda kiritgan to'g'ri harf ("A"/"B"/"C"/"D"), yoki None
+    (talaba hech narsa belgilamagan / o'qib bo'lmadi deb hisoblansin).
+
+    Bu funksiya faqat MULTI (noaniq) deb belgilangan savollarni tuzatish
+    uchun mo'ljallangan, lekin o'zi buni majburlamaydi -- qaysi savollar
+    noaniq ekanligini chaqiruvchi (bot/handler) tomonda tekshiring.
+    """
+    exam_student = result.exam_student
+    answer_key: dict = exam_student.answer_key_json
+
+    raw_answers = dict(result.raw_answers_json or {})
+    raw_answers.update(corrections)
+
+    correct = incorrect = blank = ambiguous = 0
+    per_subject: dict[str, dict] = {}
+    total_score = 0.0
+
+    for tartib_str, meta in answer_key.items():
+        given = raw_answers.get(tartib_str)
+        correct_letter = meta["correct_letter_shown_to_student"]
+        ball = float(meta.get("ball", 1))
+        fan = meta.get("fan", "Umumiy")
+
+        subj = per_subject.setdefault(fan, {"correct": 0, "total": 0, "score": 0.0})
+        subj["total"] += 1
+
+        if given is None:
+            blank += 1
+        elif given == "MULTI":
+            ambiguous += 1
+        elif given == correct_letter:
+            correct += 1
+            total_score += ball
+            subj["correct"] += 1
+            subj["score"] += ball
+        else:
+            incorrect += 1
+
+    result.raw_answers_json = raw_answers
+    result.correct_count = correct
+    result.incorrect_count = incorrect
+    result.blank_count = blank
+    result.ambiguous_count = ambiguous
+    result.total_score = total_score
+    result.per_subject_json = per_subject
+    result.status = (
+        models.ResultStatus.needs_review
+        if (ambiguous > 0 or result.variant_mismatch)
+        else models.ResultStatus.ok
+    )
+    db.commit()
+    db.refresh(result)
+
+    # Natija PDF'ni yangilangan javoblar bilan qayta generatsiya qilamiz
+    try:
+        student = exam_student.student
+        group_name = student.group.name if student.group else ""
+        exam = exam_student.exam
+        variant_label = exam_student.variant.label if exam_student.variant else None
+
+        scanned_path = None
+        candidate = Path(settings.OUTPUT_DIR) / "result_scans" / f"{result.id}.jpg"
+        if candidate.exists():
+            scanned_path = str(candidate)
+
+        download_url = _build_download_url(result.id)
+        exam_name = ""
+        if exam_student.variant and exam_student.variant.test_set:
+            exam_name = exam_student.variant.test_set.name
+
+        pdf_path = Path(settings.OUTPUT_DIR) / "results" / f"{result.id}.pdf"
+        generate_result_pdf(
+            output_path=str(pdf_path),
+            student_full_name=student.full_name,
+            group_name=group_name,
+            exam_name=exam_name,
+            exam_code=exam.exam_code if exam else "",
+            total_score=total_score,
+            total_questions=exam.total_questions if exam else len(answer_key),
+            raw_answers=raw_answers,
+            answer_key=answer_key,
+            per_subject=per_subject,
+            scanned_image_path=scanned_path,
+            download_url=download_url,
+            variant_label=variant_label,
+        )
+        result.result_pdf_path = str(pdf_path)
+        db.commit()
+        db.refresh(result)
+    except Exception:  # noqa: BLE001
+        logger.exception("Qo'lda tuzatishdan keyin natija PDF qayta generatsiyasida xato")
 
     return result
