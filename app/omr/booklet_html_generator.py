@@ -89,28 +89,15 @@ img.question-image { display: block; max-width: 100%; margin: 2mm 0; }
 def build_booklet_html(
     student: dict, exam_id: str, booklet_id: str,
     rendered_questions: list[dict], brand_name: str = "BRAND NAME",
-    variant_number: int | None = None,   # YANGI
+    variant_label: str | None = None,   # <-- YANGI
 ) -> str:
-    """rendered_questions -- randomization.build_shuffled_booklet() natijasi.
-    variant_number -- talabaga tayinlangan TEST VARIANTI (1..4), javoblar
-    varag'ida shu raqam bo'yab belgilanadi (app/omr/omr_reader.py buni ham
-    o'qiydi)."""
+    """rendered_questions -- randomization.build_shuffled_booklet() natijasi."""
 
     fanlar_str = ", ".join(sorted({q["fan"] for q in rendered_questions}))
 
-    variant_html = ""
-    if variant_number is not None:
-        variant_html = f"""
-        <div class="variant-box">
-            <div class="variant-label">TEST VARIANTI</div>
-            <div class="variant-number">{variant_number}</div>
-        </div>
-        """
-
-    variant_instruction = (
-        f'<li><b>Yuqoridagi TEST VARIANTI ({variant_number}) raqamini javoblar '
-        f'varag\'idagi "TEST VARIANTI" bo\'limida ham bo\'yab belgilang.</b></li>'
-        if variant_number is not None else ""
+    variant_html = (
+        f'<div style="margin-top:2mm;font-size:8pt;font-weight:bold;">Variant: {variant_label}</div>'
+        if variant_label else ""
     )
 
     cover_html = f"""
@@ -122,18 +109,15 @@ def build_booklet_html(
             <div class="label">TALABA</div>
             <div class="name">{student['full_name']}</div>
             <div>{student.get('group_name', '')}</div>
-            <div style="margin-top:3mm;font-size:7.5pt;color:#666;">Fanlar: {fanlar_str} </div>
+            <div style="margin-top:3mm;font-size:7.5pt;color:#666;">Fanlar: {fanlar_str}</div>
+            {variant_html}
         </div>
-        <div style="font-size:7pt;color:#666;">SAVOL ID (bu raqamni javoblar varag'iga ham bo'yab belgilang)</div>
-        {_digit_boxes_html(booklet_id)}
-        {variant_html}
         <div class="instructions">
             <b>KO'RSATMA</b>
             <ol>
                 <li>Har bir savolga faqat bitta javob belgilang.</li>
                 <li>Javoblarni ushbu kitobchaga emas, alohida javoblar varag'iga bo'yab belgilang.</li>
                 <li>Yuqoridagi 7 xonali savol ID ni javoblar varag'ida ham bo'yab belgilang.</li>
-                {variant_instruction}
                 <li>Kitobchani boshqa talabaga bermang -- savollar tartibi va variantlar individual.</li>
                 <li>Vaqt tugagach kitobcha va javoblar varag'ini o'qituvchiga topshiring.</li>
             </ol>
@@ -170,11 +154,11 @@ def build_booklet_html(
 def render_booklet_pdf(
     student: dict, exam_id: str, booklet_id: str,
     rendered_questions: list[dict], output_path: str, brand_name: str = "BRAND NAME",
-    variant_number: int | None = None,   # YANGI
+    variant_label: str | None = None,   # <-- YANGI
 ) -> str:
     html = build_booklet_html(
         student, exam_id, booklet_id, rendered_questions,
-        brand_name=brand_name, variant_number=variant_number,
+        brand_name=brand_name, variant_label=variant_label,
     )
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     HTML(string=html).write_pdf(output_path)
