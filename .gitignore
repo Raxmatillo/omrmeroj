@@ -1,3 +1,6 @@
 ./venv
 .env
 venv
+./generated_files
+test
+./test

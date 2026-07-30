@@ -2,7 +2,7 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.types import Message
+from aiogram.types import FSInputFile, Message
 
 from app import models
 from app.database import SessionLocal
@@ -52,6 +52,17 @@ async def _process_answer_sheet(message: Message, file_id: str, filename_hint: s
             await status_msg.edit_text(f"Xatolik: {e}")
             return
 
+        # MUHIM: bu javob varag'i boshqa teacherning imtihoniga tegishli
+        # bo'lishi mumkin (booklet_id orqali topiladi, telegram user
+        # bilan bog'liq emas) -- shuning uchun natija shu teacherning
+        # o'ziga tegishli ekanligini tekshiramiz (app/routers/results.py
+        # dagi /results/check endpointidagi bir xil himoya).
+        if result.exam_student.exam.teacher_id != user.id:
+            await status_msg.edit_text(
+                "Bu javob varag'i sizning imtihoningizga tegishli emas."
+            )
+            return
+
         exam_student = result.exam_student
         student = exam_student.student
 
@@ -74,8 +85,30 @@ async def _process_answer_sheet(message: Message, file_id: str, filename_hint: s
             f"Bo'sh: {result.blank_count} | Noaniq: {result.ambiguous_count}\n"
             f"Umumiy ball: {result.total_score}\n\n"
             f"Fanlar bo'yicha:\n{subjects_text}"
-            f"{review_note}"
+            f"{review_note}\n\n"
+            f"Natija ID: {result.id}"
         )
+
+        # Natija PDF tayyor bo'lsa -- botning o'zi shu yerda yuboradi,
+        # saytga alohida kirib yuklab olish shart emas.
+        if result.result_pdf_path:
+            try:
+                await message.answer_document(
+                    FSInputFile(result.result_pdf_path, filename=f"natija_{student.full_name}.pdf"),
+                    caption="Natija PDF",
+                )
+            except Exception:  # noqa: BLE001 -- fayl yuborilmasa ham, natija DB'da saqlangan
+                logger.exception("Natija PDF'ni Telegram orqali yuborishda xato")
+                await message.answer(
+                    "Natija saqlandi, lekin PDF faylni shu yerda yuborishda xatolik yuz berdi. "
+                    "Saytdan yuklab olishingiz mumkin."
+                )
+        else:
+            await message.answer(
+                "Natija saqlandi, lekin PDF fayl hali generatsiya qilinmagan "
+                "(server tomonida xatolik bo'lgan bo'lishi mumkin)."
+            )
+
     except Exception:
         logger.exception("Javob varag'ini qayta ishlashda kutilmagan xato")
         await message.answer("Kutilmagan xatolik yuz berdi, birozdan keyin qayta urinib ko'ring.")

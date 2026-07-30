@@ -144,6 +144,14 @@ class SubjectBlock:
     subject: str
     point: float
 
+    # True bo'lsa -- bu blok BIR NECHTA turli ball qiymatiga ega
+    # savollarni birlashtirgan (masalan bitta ustunda 1.1, 2.1 va 3.1
+    # ballli savollar aralash). Bunday holda `point` maydoni faqat
+    # BIRINCHI savolning ballini saqlaydi va ustunning boshida "X ball"
+    # yozuvini CHIZISH KERAK EMAS -- chunki u chalg'ituvchi/noto'g'ri
+    # bo'lar edi (draw_answer_column shu bayroqni tekshiradi).
+    mixed_points: bool = False
+
     @property
     def question_count(self) -> int:
         return self.end - self.start + 1
@@ -161,15 +169,36 @@ class Exam:
     # 30, 45, 60 yoki 90
     total_questions: int
 
+    # USTUNLARGA bubble chizish uchun -- har bir ustun (1-30/31-60/61-90)
+    # uchun BITTA blok (agar bir ustunda bir nechta fan/ball aralash
+    # bo'lsa, ular shu yerda bitta blokka birlashtirilgan bo'lishi
+    # mumkin -- app/services/exam_service.py._build_subject_blocks'ga
+    # qarang).
     subjects: List[SubjectBlock] = field(
         default_factory=list
     )
+
+    # O'QUVCHI MA'LUMOTLARI qutisidagi "Fan / Oraliq / Soni / Ball / Jami"
+    # jadvali uchun -- HAR BIR fan/ball guruhi ALOHIDA qator sifatida.
+    # `subjects`dan farqli o'laroq bu yerda birlashtirish YO'Q, shuning
+    # uchun 30 ta savol 3 xil fandan iborat bo'lsa ham (masalan Majburiy
+    # fanlar 1.1 ball, Matematika 2.1 ball, Ingliz tili 3.1 ball -- har
+    # birida 10tadan), jadvalda 3 ta alohida qator ko'rinadi. Bo'sh
+    # qoldirilsa (masalan eski chaqiruvlar bilan moslik uchun),
+    # draw_student_info() `subjects`ni ishlatadi (fallback).
+    subject_breakdown: List[SubjectBlock] = field(
+        default_factory=list
+    )
+
+    @property
+    def _breakdown_or_subjects(self) -> List[SubjectBlock]:
+        return self.subject_breakdown or self.subjects
 
     @property
     def total_possible_score(self) -> float:
         return sum(
             subject.total_point
-            for subject in self.subjects
+            for subject in self._breakdown_or_subjects
         )
 
 
@@ -685,7 +714,12 @@ def draw_student_info(
     # joyga qarab imkon boricha KATTA qilinadi.
     # ------------------------------------------------------
 
-    subjects = exam.subjects
+    # MUHIM: bu yerda `exam.subjects` (ustunlarga bubble chizish uchun
+    # birlashtirilgan bloklar) EMAS, `exam.subject_breakdown` (har fan/ball
+    # guruhi alohida qator) ishlatiladi -- aks holda 30 talik testda 3 xil
+    # fan bitta blokka birlashtirilgani uchun jadvalda faqat 1 ta qator
+    # (va faqat birinchi fanning balli) chiqib qolar edi.
+    subjects = exam._breakdown_or_subjects
 
     table_top = cursor_top
     table_bottom = top + height - 2
@@ -1059,36 +1093,35 @@ def draw_answer_column(
 
         return
 
-    # Header
+    # Header -- MUHIM: savol oralig'i ("1-30") endi ko'rsatilmaydi,
+    # chunki bitta ustun har doim boshidan to'liq to'ldiriladi va
+    # alohida oraliq yozuvi keraksiz/chalg'ituvchi edi.
     draw_text(
         c,
         left_mm + width_mm / 2,
-        top_mm + 5,
-        f"{subject_block.start}-{subject_block.end}",
-        size=7.5,
-        bold=True,
-        center=True,
-    )
-
-    draw_text(
-        c,
-        left_mm + width_mm / 2,
-        top_mm + 10,
+        top_mm + 7,
         subject_block.subject,
         size=6.5,
         bold=True,
         center=True,
     )
 
-    draw_text(
-        c,
-        left_mm + width_mm / 2,
-        top_mm + 14,
-        f"{subject_block.point:g} ball",
-        size=5.8,
-        center=True,
-        gray=True,
-    )
+    # Ball faqat BLOKDAGI BARCHA savollar BIR XIL ballga ega bo'lsa
+    # ko'rsatiladi. Aks holda (mixed_points=True -- masalan bitta
+    # ustunda 1.1/2.1/3.1 aralash) bu yozuv chiqarilmaydi, chunki
+    # bitta raqam butun ustun "shu ballga ega" degan noto'g'ri
+    # taassurot qoldirar edi -- haqiqiy ball har bir savolning o'z
+    # `ball` maydonidan (DB'dan) olinadi va baholash shu asosda ishlaydi.
+    if not subject_block.mixed_points:
+        draw_text(
+            c,
+            left_mm + width_mm / 2,
+            top_mm + 12,
+            f"{subject_block.point:g} ball",
+            size=5.8,
+            center=True,
+            gray=True,
+        )
 
     question_x = left_mm + 6
 

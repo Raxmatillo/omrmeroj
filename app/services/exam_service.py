@@ -60,26 +60,113 @@ def _question_to_dict(q: models.Question) -> dict:
 
 
 def _build_subject_blocks(questions: list[dict]) -> list[SubjectBlock]:
-    """Javoblar varag'idagi (1-30 / 31-60 / 61-90) fan bloklari -- asl
-    `tartib` pozitsiyalaridan hosil qilinadi. Randomizatsiyadan keyin ham
-    bu SLOTLAR o'zgarmaydi, faqat qaysi savol qaysi pozitsiyada
-    turishi o'zgaradi."""
-    blocks: list[SubjectBlock] = []
+    """
+    Javoblar varag'idagi bloklarni USTUN chegaralari (1-30 / 31-60 / 61-90)
+    bo'yicha yaratadi -- fan yoki ball o'zgarishiga qarab EMAS.
+
+    MUHIM (2 marta tuzatilgan xato tarixi):
+      v1 xato: har `fan` o'zgarganda yangi SubjectBlock ochardi ->
+        distribute_subjects() (app/omr/answer_sheet_generator.py) bitta
+        ustunga bir nechta blokni ketma-ket yozib, faqat OXIRGISINI
+        qoldirardi. Natijada javoblar varag'ida faqat oxirgi fan
+        guruhidagi savollar chiqardi.
+      v2 xato (nozikroq zaiflik): tuzatilgan versiya savollarni
+        HAQIQIY `tartib` QIYMATI bo'yicha filtrlardi
+        (`start <= q["tartib"] <= end`). Bu odatiy holatda ishlaydi
+        (app/utils/excel_import.py orqali import qilinganda `tartib`
+        har doim ketma-ket 1..N beriladi), LEKIN agar `tartib`
+        qiymatlarida takrorlanish yoki bo'shliq paydo bo'lsa (masalan
+        qo'lda qo'shilgan savol, bir necha marta import, yoki boshqa
+        bir kod yo'li Excel'dagi "T/r" ustunini to'g'ridan-to'g'ri
+        `tartib` sifatida ishlatsa), filtr yana NOTO'G'RI (qisman)
+        blok hosil qilib, xuddi shu "oxirgi N ta savol" muammosini
+        qaytarishi mumkin edi.
+
+    Shu sababli endi HAQIQIY tartib qiymatiga emas, TARTIBLANGAN
+    RO'YXATDAGI POZITSIYAGA (indeksga) asoslanadi -- bu `tartib`
+    maydonidagi har qanday takrorlanish/bo'shliqdan MUSTAQIL ravishda,
+    har doim birinchi 30 tasi 1-ustunga, keyingi 30 tasi 2-ustunga,
+    oxirgi 30 tasi 3-ustunga tushishini kafolatlaydi.
+
+    Qoida (TZ bo'yicha):
+      - savollar soni <= 30  -> HAMMASI 1-ustunda (1 ta blok)
+      - savollar soni <= 60  -> 1-30 => 1-ustun, 31-60 => 2-ustun
+      - savollar soni <= 90  -> 1-30 / 31-60 / 61-90 => mos ustunlar
+
+    Bitta blok ichida bir nechta fan/ball bo'lishi mumkin (masalan 30
+    savollik testda 3 xil fan aralash bo'lishi mumkin) -- bu holda fan
+    nomlari vergul bilan birlashtirib ko'rsatiladi. `point` maydoni
+    shu blokdagi BIRINCHI savolning ballini ko'rsatadi -- bu faqat
+    ustun sarlavhasidagi ko'rsatkich, HAQIQIY baholash (omr_service.py)
+    har bir savolning o'z `ball` qiymatidan foydalanadi, shuning uchun
+    aralash ball bo'lsa ham natija noto'g'ri hisoblanmaydi.
+    """
     ordered = sorted(questions, key=lambda q: q["tartib"])
-    current_fan = None
-    start = None
-    prev_tartib = None
-    ball = None
+    total = len(ordered)
+
+    # Pozitsiya (indeks) bo'yicha kesimlar -- qiymat emas!
+    index_ranges = [(0, min(30, total))]
+    if total > 30:
+        index_ranges.append((30, min(60, total)))
+    if total > 60:
+        index_ranges.append((60, min(90, total)))
+
+    blocks: list[SubjectBlock] = []
+    for start_idx, end_idx in index_ranges:
+        part = ordered[start_idx:end_idx]
+        if not part:
+            continue
+        first, last = part[0], part[-1]
+        # Takrorlarsiz, lekin uchrash tartibini saqlab fan nomlarini yig'amiz
+        fanlar = list(dict.fromkeys(q["fan"] for q in part))
+        subject_name = ", ".join(fanlar)
+        distinct_balls = {q["ball"] for q in part}
+        blocks.append(SubjectBlock(
+            start=first["tartib"], end=last["tartib"],
+            subject=subject_name, point=first["ball"],
+            mixed_points=len(distinct_balls) > 1,
+        ))
+    return blocks
+
+
+def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
+    """
+    Javoblar varag'idagi "O'QUVCHI MA'LUMOTLARI" qutisi ichidagi
+    "Fan / Oraliq / Soni / Ball / Jami" jadvali uchun -- HAR BIR
+    fan/ball guruhini ALOHIDA qator sifatida qaytaradi.
+
+    MUHIM: `_build_subject_blocks()`dan farqi shu -- u ustunlarga
+    bubble chizish uchun bloklarni USTUN chegarasiga (1-30/31-60/61-90)
+    qarab birlashtiradi (bitta ustunda 3 xil fan bo'lsa ham bitta blok
+    bo'ladi). Bu funksiya esa hech narsani birlashtirmaydi -- shuning
+    uchun 30 talik testda 3 xil fan (masalan Majburiy fanlar 1.1 ball,
+    Matematika 2.1 ball, Ingliz tili 3.1 ball, har birida 10tadan)
+    bo'lsa, natijada 3 ta ALOHIDA qator qaytadi -- har biri o'z soni,
+    balli va jami bali bilan. Bu ro'yxat FAQAT header jadvalini
+    chizish uchun ishlatiladi, ustunlarga bubble chizishga ta'sir
+    qilmaydi (buning uchun `_build_subject_blocks()` alohida
+    ishlatiladi).
+    """
+    ordered = sorted(questions, key=lambda q: q["tartib"])
+
+    blocks: list[SubjectBlock] = []
+    current_key = None
+    start = prev_tartib = ball = fan_name = None
+
     for q in ordered:
-        if q["fan"] != current_fan:
-            if current_fan is not None:
-                blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=current_fan, point=ball))
-            current_fan = q["fan"]
+        key = (q["fan"], q["ball"])
+        if key != current_key:
+            if current_key is not None:
+                blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=fan_name, point=ball))
+            current_key = key
             start = q["tartib"]
             ball = q["ball"]
+            fan_name = q["fan"]
         prev_tartib = q["tartib"]
-    if current_fan is not None:
-        blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=current_fan, point=ball))
+
+    if current_key is not None:
+        blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=fan_name, point=ball))
+
     return blocks
 
 
@@ -132,10 +219,12 @@ def create_exam(db: Session, teacher: models.User, group_id: str, test_set_id: s
     savollar_dir.mkdir(parents=True, exist_ok=True)
     javoblar_dir.mkdir(parents=True, exist_ok=True)
 
-    subject_blocks = _build_subject_blocks(questions)
+    subject_blocks = _build_subject_blocks(questions)              # ustunlar uchun (birlashtirilgan)
+    subject_breakdown = _build_true_subject_breakdown(questions)    # header jadvali uchun (alohida qatorlar)
     sheet_exam = SheetExam(
         exam_id=exam.exam_code, exam_name=test_set.name,
         total_questions=exam.total_questions, subjects=subject_blocks,
+        subject_breakdown=subject_breakdown,
     )
 
     try:
