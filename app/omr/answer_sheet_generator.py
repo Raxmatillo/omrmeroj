@@ -18,6 +18,12 @@ Xususiyatlar:
 - A/B/C/D variantlari
 - O'quvchi ma'lumotlari
 - OMR uchun aniq koordinatalar
+- TIMING TRACK: har bir qator uchun kichik "lokator" belgisi -- reader
+  bubble y-pozitsiyasini arifmetik formula bilan HISOBLAB TOPISH o'rniga,
+  shu belgining haqiqiy (siyohdagi) markazidan o'qiydi. Bu -- telefon
+  fotosida perspective-correction xatosi qator raqami oshgan sari
+  to'planib (drift qilib) ketishining oldini oladi (real Scantron/DTM
+  turidagi tizimlarda ham ishlatiladigan standart texnika).
 
 Production:
 Bu modul keyinchalik FastAPI backend ichida ishlatilishi mumkin.
@@ -73,6 +79,25 @@ MEDIUM_GRAY = colors.Color(
     green=0.45,
     blue=0.45
 )
+
+# ============================================================
+# OMR / READER BILAN ULASHTIRILGAN KONSTANTALAR
+#
+# MUHIM: bu qiymatlar app/omr/omr_reader.py dagi bir xil nomdagi
+# konstantalar bilan ANIQ BIR XIL bo'lishi SHART. Bittasini
+# o'zgartirsangiz, ikkinchisini ham yangilang -- aks holda reader
+# generator chizgan joydan boshqa joyni qidiradi.
+# ============================================================
+
+# Registratsiya markeri -- 5mm dan 8mm ga kattalashtirildi: telefon
+# kamerasi bilan olingan (past piksel zichlikdagi) fotoda subpixel
+# markaz aniqrog'i uchun kattaroq kontur kerak.
+REGISTRATION_MARKER_SIZE_MM = 8.0
+
+# Timing track -- ustunning chap chetiga, har bir qatorga mos keladigan
+# kichik to'ldirilgan kvadrat. offset -- ustun chap chegarasidan.
+TIMING_MARK_OFFSET_MM = 1.6
+TIMING_MARK_SIZE_MM = 1.4
 
 
 # ============================================================
@@ -309,9 +334,12 @@ def draw_registration_markers(c):
         top-right
         bottom-left
         bottom-right
+
+    Marker o'lchami REGISTRATION_MARKER_SIZE_MM orqali boshqariladi --
+    omr_reader.py dagi MARKER_SIZE_MM bilan bir xil bo'lishi shart.
     """
 
-    marker_size = 5
+    marker_size = REGISTRATION_MARKER_SIZE_MM
 
     positions = [
         (7, 7),
@@ -332,6 +360,36 @@ def draw_registration_markers(c):
             fill=1,
             stroke=0
         )
+
+
+# ============================================================
+# TIMING TRACK (QATOR LOKATORI)
+# ============================================================
+
+def draw_timing_mark(
+    c,
+    center_x_mm: float,
+    center_y_top_mm: float,
+    size_mm: float = TIMING_MARK_SIZE_MM,
+):
+    """
+    Kichik to'ldirilgan kvadrat -- reader bu qatorning HAQIQIY
+    y-markazini shu belgidan topadi, arifmetik formuladan emas.
+
+    Har bir ustunda (subject_block bo'sh bo'lsa ham) MAX_ROWS ta
+    belgi chiziladi -- shu bilan reader tomonida qator indekslari
+    barcha ustunlarda bir xil qoladi.
+    """
+
+    c.setFillColor(BLACK)
+    c.rect(
+        x(center_x_mm - size_mm / 2),
+        y(center_y_top_mm) - size_mm * mm / 2,
+        size_mm * mm,
+        size_mm * mm,
+        fill=1,
+        stroke=0,
+    )
 
 
 # ============================================================
@@ -623,7 +681,7 @@ def draw_student_info(
     #
     # Bu qism DINAMIK: nechta fan bo'lsa ham
     # (1, 2 yoki 3 ta), qolgan bo'sh joy ichiga
-    # avtomatik sig'diriladi — shrift esa mavjud
+    # avtomatik sig'diriladi -- shrift esa mavjud
     # joyga qarab imkon boricha KATTA qilinadi.
     # ------------------------------------------------------
 
@@ -644,14 +702,14 @@ def draw_student_info(
     row_h = available_height / total_rows
 
     # Qator balandligiga qarab shrift o'lchamini
-    # hisoblaymiz: joy ko'p bo'lsa — shrift yiriklashadi,
-    # joy kam bo'lsa (fanlar ko'p bo'lsa) — kichraydi.
+    # hisoblaymiz: joy ko'p bo'lsa -- shrift yiriklashadi,
+    # joy kam bo'lsa (fanlar ko'p bo'lsa) -- kichraydi.
     # Yuqori chegara o'qish uchun qulay va ustunlarga
     # sig'adigan darajada tanlangan.
     font_size = max(6.0, min(8.5, row_h * 1.55))
     header_font_size = max(5.2, min(7.0, font_size - 1.3))
 
-    # Ustunlar (mm, inner_left dan nisbiy emas — absolyut x)
+    # Ustunlar (mm, inner_left dan nisbiy emas -- absolyut x)
     col_subject_x = inner_left
     col_range_x = inner_left + 33
     col_count_x = inner_left + 49
@@ -944,6 +1002,12 @@ def draw_answer_column(
 ):
     """
     Bitta 30 savollik OMR ustuni.
+
+    MUHIM (timing track): ustun BO'SH (subject_block is None) bo'lsa
+    ham, timing marklar chiziladi -- chunki reader tomonida ustunlar
+    orasidagi qator indekslash BARCHA ustunlarda bir xil bo'lishi
+    kerak (aks holda find_timing_marks() ustun bo'yicha turlicha
+    sondagi belgi topib, mos kelmay qoladi).
     """
 
     draw_box(
@@ -953,6 +1017,22 @@ def draw_answer_column(
         width_mm,
         height_mm
     )
+
+    # Table settings (BO'SH ustunda ham ishlatiladi -- timing track
+    # header_h dan boshlanadi, xuddi to'ldirilgan ustundagi kabi)
+    header_h = 18
+    row_h = 4.25
+
+    # Timing track -- har bir qator uchun, subject_block bor-yo'qligidan
+    # qat'i nazar. Bu reader'ga arifmetik formulaga tayanmasdan
+    # HAQIQIY qator y-markazini berish imkonini beradi.
+    for i in range(max_rows):
+        row_top = top_mm + header_h + i * row_h
+        draw_timing_mark(
+            c,
+            left_mm + TIMING_MARK_OFFSET_MM,
+            row_top + row_h / 2,
+        )
 
     if subject_block is None:
 
@@ -1010,9 +1090,6 @@ def draw_answer_column(
         gray=True,
     )
 
-    # Table settings
-    header_h = 18
-
     question_x = left_mm + 6
 
     answer_x = [
@@ -1038,8 +1115,6 @@ def draw_answer_column(
         )
 
     # Question rows
-    row_h = 4.25
-
     for i in range(max_rows):
 
         question_number = subject_block.start + i
