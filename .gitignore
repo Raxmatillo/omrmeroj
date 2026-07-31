@@ -37,3 +37,4 @@ env/
 # Uploads (agar mavjud bo'lsa)
 uploads/
 media/
+alembic/__pycache__/

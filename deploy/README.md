@@ -142,3 +142,6 @@ ishonchli variant. Agar keyinchalik yuqori yuklama bo'lsa, aiogram'ning
 webhook rejimiga o'tish mumkin (bot handlerlarining o'zi o'zgarmaydi,
 faqat `bot/main.py`dagi ishga tushirish qismi FastAPI ichiga webhook route
 sifatida ko'chadi).
+
+
+.venv/bin/alembic upgrade head

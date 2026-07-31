@@ -76,3 +76,5 @@ app/
    Role key'ni `SUPABASE_SERVICE_KEY`ga qo'ying.
 4. Boshqa hech narsa o'zgarmaydi -- kod allaqachon shu ikkalasiga
    moslab yozilgan.
+
+

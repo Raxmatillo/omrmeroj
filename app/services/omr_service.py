@@ -259,6 +259,178 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
 
     return result
 
+# app/services/omr_service.py -- QO'SHIMCHA funksiyalar
+def analyze_answer_sheet(file_bytes: bytes, filename_hint: str = "sheet.pdf") -> dict:
+    """Faqat CV tahlili -- DB'ga hech narsa yozmaydi."""
+    suffix = os.path.splitext(filename_hint)[-1].lower() or ".pdf"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = tmp.name
+    try:
+        try:
+            report = detect_answer_sheet(tmp_path)
+        except Exception as e:
+            raise OmrError(f"Javob varag'ini o'qib bo'lmadi: {e}") from e
+    finally:
+        os.unlink(tmp_path)
+    return {"report": report, "booklet_id": _parse_booklet_id(report.get("sheet_id"))}
+
+
+def _score_from_raw_answers(
+    answer_key: dict, raw_answers: dict, detected_variant, variant_mismatch: bool
+) -> dict:
+    """raw_answers asosida ballarni hisoblaydi -- DB bilan ishlamaydi,
+    shuning uchun ham dastlabki hisoblashda, ham qo'lda tuzatishdan
+    keyin qayta hisoblashda ishlatiladi."""
+    correct = incorrect = blank = ambiguous = 0
+    per_subject: dict = {}
+    total_score = 0.0
+
+    for tartib_str, meta in answer_key.items():
+        given = raw_answers.get(tartib_str)
+        correct_letter = meta["correct_letter_shown_to_student"]
+        ball = float(meta.get("ball", 1))
+        fan = meta.get("fan", "Umumiy")
+
+        subj = per_subject.setdefault(fan, {"correct": 0, "total": 0, "score": 0.0})
+        subj["total"] += 1
+
+        if given is None:
+            blank += 1
+        elif given == "MULTI":
+            ambiguous += 1
+        elif given == correct_letter:
+            correct += 1
+            total_score += ball
+            subj["correct"] += 1
+            subj["score"] += ball
+        else:
+            incorrect += 1
+
+    return {
+        "raw_answers": raw_answers,
+        "correct": correct, "incorrect": incorrect, "blank": blank, "ambiguous": ambiguous,
+        "total_score": total_score, "per_subject": per_subject,
+        "detected_variant": detected_variant, "variant_mismatch": variant_mismatch,
+    }
+
+
+def compute_scores(db: Session, booklet_id: str, report: dict) -> dict:
+    """exam_student topadi, ballarni hisoblaydi -- hali ham DB'ga yozmaydi."""
+    exam_student = (
+        db.query(models.ExamStudent)
+        .filter(models.ExamStudent.booklet_id == booklet_id)
+        .first()
+    )
+    if not exam_student:
+        raise OmrError(f"Booklet ID topilmadi: {booklet_id}")
+
+    raw_answers: dict[str, str | None] = {}
+    for q in report["questions"]:
+        key = str(q.question)
+        raw_answers[key] = None if q.status == "blank" else ("MULTI" if q.status == "uncertain" else q.answer)
+
+    detected_variant = report.get("detected_paper_variant")
+    expected_variant = exam_student.paper_variant_number
+    variant_mismatch = expected_variant is not None and (
+        detected_variant is None or detected_variant != expected_variant
+    )
+
+    scores = _score_from_raw_answers(
+        exam_student.answer_key_json, raw_answers, detected_variant, variant_mismatch
+    )
+    scores["exam_student_id"] = exam_student.id
+    return scores
+
+
+def recompute_scores_with_corrections(
+    db: Session, exam_student_id: str, previous_scores: dict, corrections: dict[str, str | None]
+) -> dict:
+    """Qo'lda tuzatilgan javoblar bilan ballarni QAYTA hisoblaydi.
+    DB'ga hech narsa yozmaydi -- hali ham 'pending' holatda."""
+    exam_student = db.get(models.ExamStudent, exam_student_id)
+    if not exam_student:
+        raise OmrError("ExamStudent topilmadi (eskirgan holat)")
+
+    raw_answers = dict(previous_scores["raw_answers"])
+    raw_answers.update(corrections)
+
+    scores = _score_from_raw_answers(
+        exam_student.answer_key_json, raw_answers,
+        previous_scores["detected_variant"], previous_scores["variant_mismatch"],
+    )
+    scores["exam_student_id"] = exam_student_id
+    return scores
+
+
+def save_result(db: Session, exam_student_id: str, scores: dict, warped_image) -> models.Result:
+    """Rasmiy Result yozuvini yaratadi + natija PDF generatsiya qiladi.
+    Faqat shu funksiya chaqirilganda DB'ga yoziladi."""
+    exam_student = db.get(models.ExamStudent, exam_student_id)
+    if not exam_student:
+        raise OmrError("ExamStudent topilmadi (eskirgan holat)")
+
+    if exam_student.result is not None:
+        db.delete(exam_student.result)
+        db.flush()
+
+    status = (
+        models.ResultStatus.needs_review
+        if (scores["ambiguous"] > 0 or scores["variant_mismatch"])
+        else models.ResultStatus.ok
+    )
+
+    result = models.Result(
+        exam_student_id=exam_student.id,
+        raw_answers_json=scores["raw_answers"],
+        correct_count=scores["correct"], incorrect_count=scores["incorrect"],
+        blank_count=scores["blank"], ambiguous_count=scores["ambiguous"],
+        total_score=scores["total_score"], per_subject_json=scores["per_subject"],
+        detected_paper_variant=scores["detected_variant"],
+        variant_mismatch=scores["variant_mismatch"], status=status,
+    )
+    db.add(result)
+    db.commit()
+    db.refresh(result)
+
+    try:
+        student = exam_student.student
+        group_name = student.group.name if student.group else ""
+        exam = exam_student.exam
+        answer_key = exam_student.answer_key_json
+
+        scanned_path = _save_scanned_preview(warped_image, result.id)
+        download_url = _build_download_url(result.id)
+
+        exam_name = ""
+        if exam_student.variant and exam_student.variant.test_set:
+            exam_name = exam_student.variant.test_set.name
+        variant_label = exam_student.variant.label if exam_student.variant else None
+
+        pdf_path = Path(settings.OUTPUT_DIR) / "results" / f"{result.id}.pdf"
+        generate_result_pdf(
+            output_path=str(pdf_path),
+            student_full_name=student.full_name,
+            group_name=group_name,
+            exam_name=exam_name,
+            exam_code=exam.exam_code if exam else "",
+            total_score=scores["total_score"],
+            total_questions=exam.total_questions if exam else len(answer_key),
+            raw_answers=scores["raw_answers"],
+            answer_key=answer_key,
+            per_subject=scores["per_subject"],
+            scanned_image_path=scanned_path,
+            download_url=download_url,
+            variant_label=variant_label,
+        )
+        result.result_pdf_path = str(pdf_path)
+        db.commit()
+        db.refresh(result)
+    except Exception:  # noqa: BLE001
+        logger.exception("Natija PDF generatsiyasida xato -- Result baribir saqlandi")
+
+    return result
+
 def apply_manual_corrections(db: Session, result: models.Result, corrections: dict[str, str | None]) -> models.Result:
     """
     corrections -- {"15": "A", "24": None, ...}: savol raqami (string) ->
@@ -355,3 +527,4 @@ def apply_manual_corrections(db: Session, result: models.Result, corrections: di
         logger.exception("Qo'lda tuzatishdan keyin natija PDF qayta generatsiyasida xato")
 
     return result
+

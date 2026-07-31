@@ -170,4 +170,37 @@ class ExamOut(BaseModel):
     status: str
     created_at: datetime
     expires_at: datetime | None
+    public_checking: bool
 
+
+# ---------- NATIJA TAFSILOTI / QO'LDA TUZATISH ----------
+
+class QuestionAnswerDetail(BaseModel):
+    question: int
+    fan: str
+    ball: float
+    given: str | None          # talaba belgilagan harf (yoki None -- bo'sh/noaniq)
+    correct_letter: str        # to'g'ri javob (shu talabaga chiqqan variant bo'yicha)
+    status: str                # "correct" | "incorrect" | "blank" | "ambiguous"
+
+
+class ResultDetailOut(BaseModel):
+    id: str
+    student: str
+    correct_count: int
+    incorrect_count: int
+    blank_count: int
+    ambiguous_count: int
+    total_score: float
+    per_subject: dict
+    status: str
+    has_pdf: bool
+    variant_mismatch: bool
+    detected_paper_variant: int | None
+    expected_paper_variant: int | None
+    questions: list[QuestionAnswerDetail]
+
+
+class ManualCorrectionIn(BaseModel):
+    # {"15": "A", "24": null} -- savol raqami -> to'g'ri harf (yoki bo'sh/aniqlanmagan uchun null)
+    corrections: dict[str, str | None]

@@ -32,6 +32,8 @@ from app.omr.booklet_html_generator import render_booklet_pdf
 from app.omr.randomization import build_shuffled_booklet
 
 
+import logging; logger = logging.getLogger("omrmeroj.exam")
+
 class ExamServiceError(Exception):
     """Foydalanuvchiga to'g'ridan-to'g'ri ko'rsatsa bo'ladigan xato."""
 
@@ -129,11 +131,12 @@ def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
         blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=fan_name, point=ball))
 
     return blocks
-
-def create_exam(
+def create_exam_job(
     db: Session, teacher: models.User, group_id: str, test_set_id: str,
     paper_variant_count: int = 1,
-) -> models.Exam:
+) -> tuple[models.Exam, models.ProcessingJob]:
+    """Faqat Exam + ProcessingJob yozuvlarini yaratadi (tez, sinxron).
+    Haqiqiy PDF generatsiyasi _run_exam_generation() orqali orqada ishlaydi."""
     group = db.get(models.Group, group_id)
     if not group or group.teacher_id != teacher.id:
         raise ExamServiceError("Guruh topilmadi")
@@ -142,7 +145,6 @@ def create_exam(
     if not test_set or test_set.teacher_id != teacher.id:
         raise ExamServiceError("Test topilmadi")
 
-    # 1. Barcha variantlarni tartib raqami bo'yicha olamiz
     test_variants = (
         db.query(models.Variant)
         .filter(models.Variant.test_set_id == test_set.id)
@@ -164,30 +166,53 @@ def create_exam(
     db.add(exam)
     db.flush()
 
-    job = models.ProcessingJob(kind="booklet_generation", exam_id=exam.id, status=models.JobStatus.processing)
+    job = models.ProcessingJob(kind="booklet_generation", exam_id=exam.id, status=models.JobStatus.queued)
     db.add(job)
     db.commit()
     db.refresh(exam)
     db.refresh(job)
+    return exam, job
 
-    # Mavjud variantlar sonidan kelib chiqib taqsimlaymiz
-    effective_variant_count = min(paper_variant_count, len(test_variants))
-    variant_rng = random.Random(f"{exam.id}-paper-variant")
-    paper_variant_map = _assign_paper_variants(students, effective_variant_count, variant_rng)
 
-    output_root = Path(settings.OUTPUT_DIR) / exam.id
-    savollar_dir = output_root / "Savollar"
-    javoblar_dir = output_root / "Javoblar_varaqasi"
-    savollar_dir.mkdir(parents=True, exist_ok=True)
-    javoblar_dir.mkdir(parents=True, exist_ok=True)
-
+def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> None:
+    """BackgroundTasks orqali chaqiriladi -- o'z SessionLocal()ini ochadi
+    (request session'idan mustaqil, chunki request allaqachon tugagan
+    bo'ladi)."""
+    from app.database import SessionLocal
+    db = SessionLocal()
     try:
-        for student in students:
+        exam = db.get(models.Exam, exam_id)
+        job = db.get(models.ProcessingJob, job_id)
+        job.status = models.JobStatus.processing
+        db.commit()
+
+        group = exam.group
+        test_set = exam.test_set
+        test_variants = (
+            db.query(models.Variant)
+            .filter(models.Variant.test_set_id == test_set.id)
+            .order_by(models.Variant.order_index)
+            .all()
+        )
+        students = [s for s in group.students if s.is_active]
+
+        # --- pastdagi blok eski create_exam() dagi try/except bilan AYNAN BIR XIL
+        #     (variant taqsimlash, booklet+javob varag'i generatsiyasi, ZIP) ---
+        effective_variant_count = min(paper_variant_count, len(test_variants))
+        variant_rng = random.Random(f"{exam.id}-paper-variant")
+        paper_variant_map = _assign_paper_variants(students, effective_variant_count, variant_rng)
+
+        output_root = Path(settings.OUTPUT_DIR) / exam.id
+        savollar_dir = output_root / "Savollar"
+        javoblar_dir = output_root / "Javoblar_varaqasi"
+        savollar_dir.mkdir(parents=True, exist_ok=True)
+        javoblar_dir.mkdir(parents=True, exist_ok=True)
+
+        total = len(students)
+        for idx, student in enumerate(students, start=1):
             rng = random.Random(f"{exam.id}-{student.id}")
             booklet_id = _generate_booklet_id(db, rng)
             paper_variant_number = paper_variant_map[student.id] if paper_variant_count > 1 else 1
-
-            # 2. Har bir talabaning taqsimlangan variant raqamiga mos Variant obyektini tanlaymiz
             variant_index = (paper_variant_number - 1) % len(test_variants)
             selected_variant = test_variants[variant_index]
 
@@ -195,7 +220,6 @@ def create_exam(
             if not questions:
                 raise ExamServiceError(f"'{selected_variant.label}' variantida savollar yo'q")
 
-            # Har bir variant savollariga mos javob varag'i va bloklar yaratish
             subject_blocks = _build_subject_blocks(questions)
             subject_breakdown = _build_true_subject_breakdown(questions)
             sheet_exam = SheetExam(
@@ -203,7 +227,6 @@ def create_exam(
                 total_questions=exam.total_questions, subjects=subject_blocks,
                 subject_breakdown=subject_breakdown,
             )
-
             rendered_questions, answer_key = build_shuffled_booklet(questions, seed=f"{exam.id}-{booklet_id}")
 
             sheet_student = SheetStudent(
@@ -219,7 +242,6 @@ def create_exam(
             booklet_path = savollar_dir / f"{safe_name}_{booklet_id}_Savol.pdf"
             sheet_path = javoblar_dir / f"{safe_name}_{booklet_id}_Javoblar.pdf"
 
-            # 3. Dynamic variant_label o'tkaziladi
             render_booklet_pdf(
                 student={"full_name": sheet_student.full_name, "group_name": group.name},
                 exam_id=exam.exam_code, booklet_id=booklet_id,
@@ -237,7 +259,8 @@ def create_exam(
                 paper_variant_number=paper_variant_number if paper_variant_count > 1 else None,
             ))
 
-        db.flush()
+            job.progress = int(idx / total * 100)
+            db.commit()
 
         zip_name = f"{group.name}_{test_set.name}.zip".replace(" ", "_")
         zip_path = output_root / zip_name
@@ -255,11 +278,12 @@ def create_exam(
 
     except Exception as e:  # noqa: BLE001
         db.rollback()
+        exam = db.get(models.Exam, exam_id)
+        job = db.get(models.ProcessingJob, job_id)
         exam.status = models.ExamStatus.failed
         job.status = models.JobStatus.failed
         job.error_message = str(e)
         db.commit()
-        raise ExamServiceError(f"Imtihon generatsiyasida xato: {e}") from e
-
-    db.refresh(exam)
-    return exam
+        logger.exception("Exam generatsiyasida xato: exam_id=%s", exam_id)
+    finally:
+        db.close()

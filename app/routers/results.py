@@ -3,11 +3,12 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, schemas
 from app.database import get_db
 from app.deps import require_teacher
 from app.security import decode_file_access_token
 from app.services.omr_service import check_answer_sheet, OmrError
+from app.services.omr_service import check_answer_sheet, OmrError, apply_manual_corrections
 
 router = APIRouter(prefix="/results", tags=["results"])
 
@@ -113,6 +114,89 @@ def download_result_pdf(result_id: str, user: models.User = Depends(require_teac
     return FileResponse(result.result_pdf_path, media_type="application/pdf",
                          filename=f"natija_{result_id}.pdf")
 
+def _build_result_detail(result: models.Result) -> schemas.ResultDetailOut:
+    exam_student = result.exam_student
+    answer_key = exam_student.answer_key_json
+    raw_answers = result.raw_answers_json or {}
+
+    questions: list[schemas.QuestionAnswerDetail] = []
+    for tartib_str, meta in sorted(answer_key.items(), key=lambda kv: int(kv[0])):
+        given = raw_answers.get(tartib_str)
+        correct_letter = meta["correct_letter_shown_to_student"]
+
+        if given is None:
+            status = "blank"
+        elif given == "MULTI":
+            status = "ambiguous"
+        elif given == correct_letter:
+            status = "correct"
+        else:
+            status = "incorrect"
+
+        questions.append(schemas.QuestionAnswerDetail(
+            question=int(tartib_str),
+            fan=meta.get("fan", ""),
+            ball=float(meta.get("ball", 1)),
+            given=None if given == "MULTI" else given,
+            correct_letter=correct_letter,
+            status=status,
+        ))
+
+    return schemas.ResultDetailOut(
+        id=result.id,
+        student=exam_student.student.full_name,
+        correct_count=result.correct_count,
+        incorrect_count=result.incorrect_count,
+        blank_count=result.blank_count,
+        ambiguous_count=result.ambiguous_count,
+        total_score=result.total_score,
+        per_subject=result.per_subject_json,
+        status=result.status,
+        has_pdf=bool(result.result_pdf_path),
+        variant_mismatch=result.variant_mismatch,
+        detected_paper_variant=result.detected_paper_variant,
+        expected_paper_variant=exam_student.paper_variant_number,
+        questions=questions,
+    )
+
+
+@router.get("/{result_id}/detail", response_model=schemas.ResultDetailOut)
+def get_result_detail(result_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    """Admin panel uchun: har bir savolning holati (to'g'ri/xato/bo'sh/noaniq)
+    alohida-alohida qaytariladi -- frontend shu asosida jadval chizib,
+    noaniq (ambiguous) savollarni ajratib ko'rsatishi va tuzatish formasini
+    chiqarishi mumkin."""
+    result = _get_owned_result(result_id, user, db)
+    return _build_result_detail(result)
+
+
+@router.post("/{result_id}/manual-correction", response_model=schemas.ResultDetailOut)
+def manual_correction_endpoint(
+    result_id: str,
+    payload: schemas.ManualCorrectionIn,
+    user: models.User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """O'qituvchi admin paneldan (yoki botdagi kabi) noaniq -- yoki istalgan --
+    savolni qo'lda tuzatadi. Faqat noaniq savollar bilan cheklanmaydi:
+    o'qituvchi biror savolni xato o'qilgan deb hisoblasa, uni ham
+    tuzatishi mumkin."""
+    result = _get_owned_result(result_id, user, db)
+    exam_student = result.exam_student
+    answer_key = exam_student.answer_key_json
+
+    invalid_questions = [q for q in payload.corrections if q not in answer_key]
+    if invalid_questions:
+        raise HTTPException(status_code=400, detail=f"Noma'lum savol raqamlari: {invalid_questions}")
+
+    for letter in payload.corrections.values():
+        if letter is not None and letter.upper() not in ("A", "B", "C", "D"):
+            raise HTTPException(status_code=400, detail=f"Javob faqat A/B/C/D yoki bo'sh bo'lishi kerak: {letter!r}")
+
+    normalized = {k: (v.upper() if v else None) for k, v in payload.corrections.items()}
+    result = apply_manual_corrections(db, result, normalized)
+
+    return _build_result_detail(result)
 
 @router.get("/{result_id}/public")
 def download_result_pdf_public(result_id: str, token: str, db: Session = Depends(get_db)):

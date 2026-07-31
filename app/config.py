@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_KEY: str = ""
     SUPABASE_BUCKET: str = "question-images"
 
+    CORS_ORIGINS: str = "http://localhost:5173"
+
+
     # Faqat lokal test uchun: Telegram bot tayyor bo'lmagunicha
     # teacherni to'g'ridan-to'g'ri ro'yxatdan o'tkazish imkonini beradi.
     # Productionda albatta False qilinadi.
@@ -52,6 +55,10 @@ class Settings(BaseSettings):
     PHONE_MAX_LENGTH: int = 9
     PHONE_ALLOWED_OPERATORS: str = "90,91,93,94,95,97,98,99,33,88,77,55,50"
 
+    @property
+    def CORS_ORIGINS_LIST(self) -> list[str]:
+        return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+    
     @property
     def phone_operators_list(self) -> List[str]:
         """Operator kodlarini listga o'giradi"""

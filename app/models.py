@@ -186,6 +186,7 @@ class Exam(Base):
     zip_path = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=True)  # 7 kundan keyin auto-delete uchun
+    public_checking = Column(Boolean, default=False, nullable=False)
 
     teacher = relationship("User", back_populates="exams")
     students = relationship("ExamStudent", back_populates="exam", cascade="all, delete-orphan")

@@ -17,7 +17,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from app.config import settings
-from bot.handlers import contact, omr, start
+from bot.handlers import contact, omr, start, admin
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,6 +39,7 @@ async def main() -> None:
     )
     dp = Dispatcher()
     dp.include_router(start.router)
+    dp.include_router(admin.router)
     dp.include_router(contact.router)
     dp.include_router(omr.router)
 
