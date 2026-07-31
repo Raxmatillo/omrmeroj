@@ -60,4 +60,71 @@ print("11) get test set (nested variants+questions)")
 full = call("get", f"/tests/{ts['id']}", headers=H)
 print("   -> variantlar soni:", len(full["variants"]))
 
+# ============================================================
+# YANGI CRUD ENDPOINTLAR
+# ============================================================
+
+print("12) bulk add students")
+bulk_result = call("post", f"/groups/{group['id']}/students/bulk", json={
+    "students": [
+        {"first_name": "Jasur", "last_name": "Aliyev"},
+        {"first_name": "Madina", "last_name": "Rahimova"},
+    ]
+}, headers=H)
+print("   -> qo'shildi:", len(bulk_result))
+extra_student_1, extra_student_2 = bulk_result
+
+print("13) update student")
+updated_student = call("put", f"/groups/{group['id']}/students/{student['id']}",
+                        json={"middle_name": "Baxtiyor qizi"}, headers=H)
+print("   -> middle_name:", updated_student["middle_name"])
+
+print("14) soft-delete student (deactivate)")
+soft_del = call("delete", f"/groups/{group['id']}/students/{extra_student_1['id']}", headers=H)
+print("   ->", soft_del)
+
+print("15) hard-delete student")
+hard_del = call("delete", f"/groups/{group['id']}/students/{extra_student_2['id']}?hard=true", headers=H)
+print("   ->", hard_del)
+
+print("16) update group")
+updated_group = call("put", f"/groups/{group['id']}", json={"description": "yangilangan tavsif"}, headers=H)
+print("   -> description:", updated_group["description"])
+
+print("17) update test set")
+updated_ts = call("put", f"/tests/{ts['id']}", json={"name": "Yakuniy nazorat (yangilangan)"}, headers=H)
+print("   -> name:", updated_ts["name"])
+
+print("18) delete variant (nusxa variant2 ni o'chiramiz)")
+del_variant = call("delete", f"/tests/variants/{variant2['id']}", headers=H)
+print("   ->", del_variant)
+
+print("19) delete exam (mavjud bo'lmagan id -- 404 kutiladi)")
+r = client.delete("/exams/nonexistent-id", headers=H)
+assert r.status_code == 404, f"Kutilmagan status: {r.status_code}: {r.text}"
+print("   -> 404 to'g'ri qaytdi")
+
+print("20) delete result (mavjud bo'lmagan id -- 404 kutiladi)")
+r = client.delete("/results/nonexistent-id", headers=H)
+assert r.status_code == 404, f"Kutilmagan status: {r.status_code}: {r.text}"
+print("   -> 404 to'g'ri qaytdi")
+
+print("21) update profile")
+updated_me = call("put", "/auth/me", json={"full_name": "Yangilangan Ism"}, headers=H)
+print("   -> full_name:", updated_me["full_name"])
+
+print("22) change password")
+new_token = call("post", "/auth/change-password",
+                  json={"old_password": "test1234", "new_password": "newpass123"}, headers=H)["access_token"]
+H = {"Authorization": f"Bearer {new_token}"}
+print("   -> parol yangilandi, yangi token olindi")
+
+print("23) delete test set (cascade: variants + questions)")
+del_ts = call("delete", f"/tests/{ts['id']}", headers=H)
+print("   ->", del_ts)
+
+print("24) delete group (cascade: students)")
+del_group = call("delete", f"/groups/{group['id']}", headers=H)
+print("   ->", del_group)
+
 print("\nHAMMASI OK")

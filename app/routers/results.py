@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+from pathlib import Path
+from app.config import settings
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -217,3 +220,13 @@ def download_result_pdf_public(result_id: str, token: str, db: Session = Depends
 
     return FileResponse(result.result_pdf_path, media_type="application/pdf",
                          filename=f"natija_{result_id}.pdf")
+
+@router.delete("/{result_id}")
+def delete_result(result_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    result = _get_owned_result(result_id, user, db)
+    if result.result_pdf_path:
+        Path(result.result_pdf_path).unlink(missing_ok=True)
+    (Path(settings.OUTPUT_DIR) / "result_scans" / f"{result.id}.jpg").unlink(missing_ok=True)
+    db.delete(result)
+    db.commit()
+    return {"ok": True}

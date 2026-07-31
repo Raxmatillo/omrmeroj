@@ -3,6 +3,8 @@ from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+
 
 from app import models, schemas
 from app.database import get_db
@@ -50,6 +52,27 @@ def list_test_sets(user: models.User = Depends(require_teacher), db: Session = D
 def get_test_set(test_set_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
     return _get_owned_test_set(test_set_id, user, db)
 
+@router.put("/{test_set_id}", response_model=schemas.TestSetOut)
+def update_test_set(test_set_id: str, payload: schemas.TestSetUpdateIn,
+                     user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    ts = _get_owned_test_set(test_set_id, user, db)
+    if payload.name is not None:
+        ts.name = payload.name
+    db.commit()
+    db.refresh(ts)
+    return ts
+
+
+@router.delete("/{test_set_id}")
+def delete_test_set(test_set_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    ts = _get_owned_test_set(test_set_id, user, db)
+    try:
+        db.delete(ts)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Bu test asosida imtihon(lar) yaratilgan -- o'chirib bo'lmaydi.")
+    return {"ok": True}
 
 # ---------- Variant ----------
 
@@ -85,6 +108,17 @@ def duplicate_variant(variant_id: str, new_label: str,
     db.refresh(new_variant)
     return new_variant
 
+
+@router.delete("/variants/{variant_id}")
+def delete_variant(variant_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    variant = _get_owned_variant(variant_id, user, db)
+    try:
+        db.delete(variant)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="Bu variant asosida imtihon(lar) yaratilgan -- o'chirib bo'lmaydi.")
+    return {"ok": True}
 
 # ---------- Question ----------
 

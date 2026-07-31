@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from fastapi import BackgroundTasks
-from app.services.exam_service import create_exam_job, run_exam_generation, ExamServiceError
+from app.services.exam_service import create_exam_job, run_exam_generation, ExamServiceError, delete_exam
 
 from app import models, schemas
 from app.database import get_db
@@ -85,3 +85,9 @@ def download_exam_zip(exam_id: str, user: models.User = Depends(require_teacher)
         raise HTTPException(status_code=400, detail="Imtihon hali tayyor emas")
     return FileResponse(exam.zip_path, media_type="application/zip", filename=f"{exam.exam_code}.zip")
 
+
+@router.delete("/{exam_id}")
+def delete_exam_endpoint(exam_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    exam = _get_owned_exam(exam_id, user, db)
+    delete_exam(db, exam)
+    return {"ok": True}

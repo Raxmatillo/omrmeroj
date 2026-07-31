@@ -103,8 +103,26 @@ class GroupOut(GroupIn):
     created_at: datetime
     students: list[StudentOut] = []
 
+class GroupUpdateIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class StudentUpdateIn(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    middle_name: str | None = None
+    is_active: bool | None = None
+
+
+class StudentBulkIn(BaseModel):
+    students: list[StudentIn] = Field(..., min_length=1, max_length=200)
+
 
 # ---------- TESTLAR ----------
+
+class TestSetUpdateIn(BaseModel):
+    name: str | None = None
 
 class QuestionIn(BaseModel):
     tartib: int
@@ -204,3 +222,14 @@ class ResultDetailOut(BaseModel):
 class ManualCorrectionIn(BaseModel):
     # {"15": "A", "24": null} -- savol raqami -> to'g'ri harf (yoki bo'sh/aniqlanmagan uchun null)
     corrections: dict[str, str | None]
+
+
+# ---------- PROFIL ----------
+
+class ProfileUpdateIn(BaseModel):
+    full_name: str | None = None
+
+
+class ChangePasswordIn(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=6)

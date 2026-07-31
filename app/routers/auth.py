@@ -109,6 +109,35 @@ NOT_LINKED_DETAIL = (
 #      bo'lsa is_verified=True qilib, token qaytaradi (avtomatik login).
 #
 
+@router.post("/dev-register", response_model=schemas.TokenOut)
+def dev_register(payload: schemas.RegisterRequestIn, db: Session = Depends(get_db)):
+    """FAQAT DEV_MODE=true bo'lganda ishlaydi -- Telegram bot orqali
+    tasdiqlashni chetlab o'tib, to'g'ridan-to'g'ri faollashtirilgan
+    teacher yaratadi. Productionda albatta DEV_MODE=false bo'lishi
+    shart (bu holda 404 qaytaradi -- yashirin endpoint)."""
+    if not settings.DEV_MODE:
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    if not user:
+        user = models.User(
+            phone=payload.phone,
+            full_name=payload.full_name,
+            password_hash=hash_password(payload.password),
+            is_verified=True,
+            is_active=True,
+        )
+        db.add(user)
+    else:
+        user.full_name = payload.full_name
+        user.password_hash = hash_password(payload.password)
+        user.is_verified = True
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user.id, user.role.value)
+    return schemas.TokenOut(access_token=token)
+
 # (bu kod sizda allaqachon bor, faqat ishlatilish tartibi)
 @router.post("/register-request", response_model=schemas.RequestCodeOut)
 async def register_request(payload: schemas.RegisterRequestIn, db: Session = Depends(get_db)):
@@ -224,3 +253,24 @@ def reset_password(payload: schemas.ResetPasswordIn, db: Session = Depends(get_d
 @router.get("/me", response_model=schemas.UserOut)
 def me(user: models.User = Depends(get_current_user)):
     return user
+
+
+@router.put("/me", response_model=schemas.UserOut)
+def update_profile(payload: schemas.ProfileUpdateIn,
+                    user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if payload.full_name is not None:
+        user.full_name = payload.full_name
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/change-password", response_model=schemas.TokenOut)
+def change_password(payload: schemas.ChangePasswordIn,
+                     user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    if not verify_password(payload.old_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="Joriy parol noto'g'ri")
+    user.password_hash = hash_password(payload.new_password)
+    db.commit()
+    token = create_access_token(user.id, user.role.value)
+    return schemas.TokenOut(access_token=token)

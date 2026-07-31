@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import random
 import secrets
+import shutil
 import zipfile
 from pathlib import Path
 
@@ -287,3 +288,28 @@ def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> 
         logger.exception("Exam generatsiyasida xato: exam_id=%s", exam_id)
     finally:
         db.close()
+
+def delete_exam(db: Session, exam: models.Exam) -> None:
+    """Exam + unga tegishli barcha fayllarni (booklet/javob varag'i PDF,
+    natija PDF, skan rasm, zip) diskdan va DB'dan o'chiradi."""
+    for exam_student in exam.students:
+        result = exam_student.result
+        if result is not None:
+            if result.result_pdf_path:
+                Path(result.result_pdf_path).unlink(missing_ok=True)
+            scan_path = Path(settings.OUTPUT_DIR) / "result_scans" / f"{result.id}.jpg"
+            scan_path.unlink(missing_ok=True)
+            db.delete(result)
+        if exam_student.booklet_pdf_path:
+            Path(exam_student.booklet_pdf_path).unlink(missing_ok=True)
+        if exam_student.answer_sheet_pdf_path:
+            Path(exam_student.answer_sheet_pdf_path).unlink(missing_ok=True)
+
+    db.flush()
+
+    if exam.zip_path:
+        Path(exam.zip_path).unlink(missing_ok=True)
+    shutil.rmtree(Path(settings.OUTPUT_DIR) / exam.id, ignore_errors=True)
+
+    db.delete(exam)
+    db.commit()
