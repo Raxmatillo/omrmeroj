@@ -64,6 +64,23 @@ class RequestCodeOut(BaseModel):
     sent: bool
     detail: str
 
+class ChangePhoneRequestIn(BaseModel):
+    new_phone: str
+
+    @field_validator("new_phone")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
+
+
+class ChangePhoneVerifyIn(BaseModel):
+    new_phone: str
+    code: str = Field(..., min_length=4, max_length=6)
+
+    @field_validator("new_phone")
+    @classmethod
+    def validate_phone(cls, v: str) -> str:
+        return validate_uzbek_phone(v)
 
 class TokenOut(BaseModel):
     access_token: str
@@ -142,6 +159,20 @@ class QuestionOut(QuestionIn):
     model_config = ConfigDict(from_attributes=True)
     id: str
 
+# app/schemas.py
+
+class QuestionAnswerDetail(BaseModel):
+    question: int
+    fan: str
+    ball: float
+    given: str | None
+    correct_letter: str
+    status: str  # "correct" | "incorrect" | "blank" | "ambiguous"
+    savol_html: str | None = None  # qo'shildi
+    variant_a_html: str | None = None  # qo'shildi
+    variant_b_html: str | None = None  # qo'shildi
+    variant_c_html: str | None = None  # qo'shildi
+    variant_d_html: str | None = None  # qo'shildi
 
 class VariantIn(BaseModel):
     label: str
@@ -169,6 +200,7 @@ class TestSetOut(TestSetIn):
 # ---------- IMTIHONLAR ----------
 
 class ExamCreateIn(BaseModel):
+    name: str | None = Field(None, max_length=100)  # YANGI
     group_id: str
     test_set_id: str
     # Nechta TEST VARIANTI (1..4) ishlatilishi -- app/omr/answer_sheet_generator.py
@@ -181,6 +213,7 @@ class ExamCreateIn(BaseModel):
 class ExamOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    name: str | None  # YANGI
     exam_code: str
     group_id: str
     test_set_id: str
@@ -233,3 +266,10 @@ class ProfileUpdateIn(BaseModel):
 class ChangePasswordIn(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6)
+
+class CancelCodeIn(BaseModel):
+    phone: str
+    purpose: str  # "register", "reset_password", "change_phone", "delete_account"
+
+class DeleteAccountConfirmIn(BaseModel):
+    code: str = Field(..., min_length=4, max_length=6, description="Tasdiqlash kodi")

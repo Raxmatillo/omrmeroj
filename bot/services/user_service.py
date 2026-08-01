@@ -13,16 +13,10 @@ from app import models
 from app.config import settings
 from app.security import generate_verification_code, hash_code, hash_password
 
+from app.utils.phone import normalize_phone
 
 class PhoneAlreadyLinkedError(Exception):
     """Shu telefon raqami boshqa Telegram akkauntga allaqachon ulangan."""
-
-
-def normalize_phone(phone: str) -> str:
-    p = phone.strip().replace(" ", "").replace("-", "")
-    if not p.startswith("+"):
-        p = "+" + p.lstrip("0")
-    return p
 
 
 def link_telegram_contact(

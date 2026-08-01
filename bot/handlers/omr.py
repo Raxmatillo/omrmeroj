@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
 import re
+from pathlib import Path
 
 import cv2
 from aiogram import F, Router
@@ -21,7 +22,6 @@ from app.services.omr_service import (
     recompute_scores_with_corrections,
     save_result,
 )
-from pathlib import Path
 
 logger = logging.getLogger("omrmeroj.bot.omr")
 router = Router(name="omr")
@@ -45,34 +45,38 @@ def _save_temp_scan(warped_image, exam_student_id: str) -> str:
 
 def _format_preview(scores: dict, student_name: str, is_owner: bool) -> str:
     subject_lines = [
-        f"  \u2022 {fan}: {s['correct']}/{s['total']}"
+        f"▫️ {fan}: {s['correct']}/{s['total']}"
         for fan, s in (scores.get("per_subject") or {}).items()
     ]
-    subjects_text = "\n".join(subject_lines)
+    subjects_text = "\n".join(subject_lines) if subject_lines else "▫️ Maʼlumot yoʻq"
 
-    header = "Natija (hali saqlanmagan):" if is_owner else "Sizning natijangiz:"
     text = (
-        f"{header}\n\n"
-        f"O'quvchi: {student_name}\n"
-        f"To'g'ri: {scores['correct']} | Noto'g'ri: {scores['incorrect']} | "
-        f"Bo'sh: {scores['blank']} | Noaniq: {scores['ambiguous']}\n"
-        f"Umumiy ball: {scores['total_score']}\n\n"
-        f"Fanlar bo'yicha:\n{subjects_text}"
+        f"📊 <b>Natija</b>\n\n"
+        f"👤 <b>Oʻquvchi:</b> {student_name}\n"
+        f"✅ <b>Toʻgʻri:</b> {scores['correct']}  |  ❌ <b>Notoʻgʻri:</b> {scores['incorrect']}\n"
+        f"⬜ <b>Boʻsh:</b> {scores['blank']}  |  ❓ <b>Noaniq:</b> {scores['ambiguous']}\n"
+        f"🏆 <b>Jami ball:</b> {scores['total_score']}\n\n"
+        f"📚 <b>Fanlar boʻyicha:</b>\n{subjects_text}"
     )
     if scores.get("variant_mismatch"):
         text += (
-            "\n\n\u26A0\uFE0F TEST VARIANTI mos kelmadi -- bu boshqa talabaning "
-            "javob varag'i bo'lishi mumkin, tekshiring."
+            "\n\n⚠️ <b>Diqqat!</b> Test varianti mos kelmadi — "
+            "bu boshqa talabaning varagʻi boʻlishi mumkin."
+        )
+    if not is_owner:
+        text += (
+            "\n\n🔍 <i>Bu natija faqat sizga koʻrsatiladi va "
+            "rasmiy jadvalga yozilmaydi.</i>"
         )
     return text
 
 
 async def _offer_save(message: Message):
-    kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="\U0001F4BE Bazaga saqlash", callback_data="omr_save"),
-        InlineKeyboardButton(text="\U0001F5D1 Bekor qilish", callback_data="omr_discard"),
-    ]])
-    await message.answer("Natijadan qoniqsangiz, saqlang:", reply_markup=kb)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💾 Bazaga saqlash", callback_data="omr_save")],
+        [InlineKeyboardButton(text="🗑 Bekor qilish", callback_data="omr_discard")],
+    ])
+    await message.answer("📌 Natijani saqlaysizmi?", reply_markup=kb)
 
 
 @router.message(F.document)
@@ -80,7 +84,7 @@ async def handle_document(message: Message, state: FSMContext):
     await state.clear()
     doc = message.document
     if doc.mime_type != "application/pdf":
-        await message.answer("Iltimos, faqat PDF formatidagi javob varag'ini yuboring.")
+        await message.answer("❌ Iltimos, faqat <b>PDF</b> formatidagi faylni yuboring.")
         return
     await _process_answer_sheet(message, state, file_id=doc.file_id, filename_hint=doc.file_name or "sheet.pdf")
 
@@ -94,18 +98,16 @@ async def handle_photo(message: Message, state: FSMContext):
 
 async def _process_answer_sheet(message: Message, state: FSMContext, file_id: str, filename_hint: str):
     db = SessionLocal()
+    status_msg = None
     try:
-        status_msg = await message.answer("Qabul qilindi, tekshirilmoqda...")
+        status_msg = await message.answer("🔄 Javoblar tekshirilmoqda...")
+
         file = await message.bot.get_file(file_id)
         buffer = await message.bot.download_file(file.file_path)
         file_bytes = buffer.read()
 
-        try:
-            analysis = analyze_answer_sheet(file_bytes, filename_hint)
-            scores = compute_scores(db, analysis["booklet_id"], analysis["report"])
-        except OmrError as e:
-            await status_msg.edit_text(f"Xatolik: {e}")
-            return
+        analysis = analyze_answer_sheet(file_bytes, filename_hint)
+        scores = compute_scores(db, analysis["booklet_id"], analysis["report"])
 
         exam_student = db.get(models.ExamStudent, scores["exam_student_id"])
         exam = exam_student.exam
@@ -114,11 +116,10 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
         requester = await _get_user_by_telegram_id(db, str(message.from_user.id))
         is_owner = requester is not None and requester.id == exam.teacher_id
 
-        # === KIRISH NAZORATI ===
         if not is_owner and not exam.public_checking:
             await status_msg.edit_text(
-                "\U0001F512 Bu imtihon uchun ommaviy tekshirish o'qituvchi tomonidan yopilgan.\n"
-                "Natijangizni faqat o'qituvchingizdan bilib olishingiz mumkin."
+                "🔒 Bu imtihon uchun ommaviy tekshirish <b>oʻchirilgan</b>.\n"
+                "Natijangizni faqat oʻqituvchingizdan bilib olishingiz mumkin."
             )
             return
 
@@ -126,19 +127,13 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
         await status_msg.edit_text(_format_preview(scores, student_name, is_owner))
 
         if not is_owner:
-            note = (
-                "\n\n\u2139\uFE0F Bu -- faqat sizga ko'rsatiladigan tekshiruv, "
-                "rasmiy natijalar jadvaliga yozilmaydi."
-            )
             if scores["ambiguous"] > 0:
-                note += (
-                    "\n\u26A0\uFE0F Ba'zi javoblar noaniq -- rasmiy (aniq) natijani "
-                    "faqat o'qituvchingiz tasdiqlab, saqlashi mumkin."
+                await message.answer(
+                    "⚠️ Baʼzi javoblar <b>noaniq</b> — rasmiy natijani "
+                    "faqat oʻqituvchingiz tasdiqlay oladi."
                 )
-            await message.answer(note)
             return
 
-        # === faqat egasi uchun: pending holatga saqlaymiz ===
         await state.update_data(
             pending_exam_student_id=exam_student.id,
             pending_scores=scores,
@@ -152,22 +147,48 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
             )
             await state.update_data(ambiguous_questions=ambiguous_qs)
             qs_str = ", ".join(str(q) for q in ambiguous_qs)
-            await message.answer(
-                f"\u26A0\uFE0F Quyidagi savollar noaniq: {qs_str}\n\n"
-                "Iltimos to'g'ri javoblarni shu formatda yuboring (savol raqami "
-                "+ harf, bo'sh joy bilan ajratib):\n\n"
-                "<b>15a 24b</b>\n\n"
-                "Agar talaba hech qanday variant belgilamagan bo'lsa, harf o'rniga "
-                "<b>x</b> yozing (masalan: 24x). Barcha noaniq savollarni bitta "
-                "xabarda yuboring."
+
+            # 🔥 Noaniq savollar xabarini status_msg ga o'zgartiramiz
+            await status_msg.answer(
+                f"❓ <b>Noaniq javoblar</b>\n\n"
+                f"{len(ambiguous_qs)} ta noaniq javob aniqlandi.\n"
+                f"<b>Savol raqamlari:</b> {qs_str}\n\n"
+                f"📌 <b>Tuzatish formati:</b>\n"
+                f"<code>15a 24b 24x</code>\n"
+                f"• 15-savol → A\n"
+                f"• 24-savol → B\n"
+                f"• 24-savol → boʻsh\n\n"
+                f"<i>Barchasini bitta xabarda yuboring.</i>"
             )
+
+            # 📋 Tugmalar (faqat 10 tagacha)
+            if len(ambiguous_qs) <= 10:
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text=f"№{q}",
+                        callback_data=f"fix_{q}"
+                    ) for q in ambiguous_qs]
+                ])
+                await message.answer(
+                    "📋 Noaniq savollar roʻyxati:",
+                    reply_markup=kb
+                )
+
             await state.set_state(ManualCorrectionStates.waiting_correction)
         else:
             await _offer_save(message)
 
+    except OmrError as e:
+        if status_msg:
+            await status_msg.edit_text(f"❌ Xatolik: {e}")
+        else:
+            await message.answer(f"❌ Xatolik: {e}")
     except Exception:
-        logger.exception("Javob varag'ini qayta ishlashda kutilmagan xato")
-        await message.answer("Kutilmagan xatolik yuz berdi, birozdan keyin qayta urinib ko'ring.")
+        logger.exception("Javob varag'ini qayta ishlashda xatolik")
+        if status_msg:
+            await status_msg.edit_text("❌ Kutilmagan xatolik. Iltimos, qayta urinib koʻring.")
+        else:
+            await message.answer("❌ Kutilmagan xatolik. Iltimos, qayta urinib koʻring.")
     finally:
         db.close()
 
@@ -180,14 +201,16 @@ async def handle_manual_correction(message: Message, state: FSMContext):
     exam_student_id = data.get("pending_exam_student_id")
 
     if not pending_scores or not exam_student_id:
-        await message.answer("Bu tuzatish muddati o'tgan, qaytadan javob varag'ini yuboring.")
+        await message.answer("⏳ Muddati oʻtgan. Qaytadan yuboring.")
         await state.clear()
         return
 
     pairs = re.findall(r"(\d+)\s*([A-Da-dXx])", message.text or "")
     if not pairs:
         await message.answer(
-            "Format tushunarsiz. Masalan: <b>15a 24b</b> (yoki bo'sh bo'lsa: 24x)"
+            "❌ Format notoʻgʻri.\n\n"
+            "<code>15a 24b</code> — javob A va B\n"
+            "<code>24x</code> — javob boʻsh"
         )
         return
 
@@ -204,9 +227,8 @@ async def handle_manual_correction(message: Message, state: FSMContext):
     missing = ambiguous_qs - {int(k) for k in corrections.keys()}
     if missing:
         await message.answer(
-            "Quyidagi noaniq savollar hali kiritilmadi: "
-            f"{', '.join(str(q) for q in sorted(missing))}. "
-            "Iltimos hammasini bitta xabarda yuboring."
+            f"❌ Kiritilmagan: {', '.join(str(q) for q in sorted(missing))}\n"
+            f"<i>Iltimos, barchasini yuboring.</i>"
         )
         return
 
@@ -214,7 +236,7 @@ async def handle_manual_correction(message: Message, state: FSMContext):
     try:
         new_scores = recompute_scores_with_corrections(db, exam_student_id, pending_scores, corrections)
     except OmrError as e:
-        await message.answer(f"Xatolik: {e}")
+        await message.answer(f"❌ Xatolik: {e}")
         await state.clear()
         return
     finally:
@@ -225,14 +247,12 @@ async def handle_manual_correction(message: Message, state: FSMContext):
 
     note = ""
     if skipped:
-        note = (
-            "\n\n(E'tibor bering: quyidagi raqamlar noaniq ro'yxatida yo'q edi, "
-            f"o'tkazib yuborildi: {', '.join(str(q) for q in skipped)})"
-        )
-
+        note = f"\n\nℹ️ Oʻtkazib yuborilgan: {', '.join(str(q) for q in skipped)}"
     student_name = data.get("pending_student_name", "")
+
+    # 🔥 Tuzatilgan natijani yangi xabar sifatida emas, balki status_msg o'rniga yuboramiz
     await message.answer(
-        "\u2705 Tuzatildi!\n\n" + _format_preview(new_scores, student_name, is_owner=True) + note
+        f"✅ <b>Tuzatildi!</b>\n\n{_format_preview(new_scores, student_name, is_owner=True)}{note}"
     )
     await _offer_save(message)
 
@@ -241,26 +261,28 @@ async def handle_manual_correction(message: Message, state: FSMContext):
 async def confirm_save(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     if "pending_exam_student_id" not in data:
-        await callback.answer("Bu natija muddati o'tgan, qayta yuboring.", show_alert=True)
+        await callback.answer("⏳ Muddati oʻtgan, qayta yuboring.", show_alert=True)
         return
 
     db = SessionLocal()
     try:
         warped = cv2.imread(data["pending_preview_path"])
         result = save_result(db, data["pending_exam_student_id"], data["pending_scores"], warped)
-        await callback.message.edit_text("\u2705 Natija bazaga saqlandi.")
+
+        # 🔥 Xabarni tahrirlaymiz
+        await callback.message.edit_text("✅ Natija bazaga saqlandi.")
 
         if result.result_pdf_path:
             try:
                 student_name = data.get("pending_student_name", "natija")
                 await callback.message.answer_document(
                     FSInputFile(result.result_pdf_path, filename=f"natija_{student_name}.pdf"),
-                    caption="Natija PDF",
+                    caption="📄 Natija hisoboti"
                 )
-            except Exception:  # noqa: BLE001
-                logger.exception("Natija PDF'ni yuborishda xato")
+            except Exception:
+                logger.exception("PDF yuborishda xatolik")
     except OmrError as e:
-        await callback.message.answer(f"Xatolik: {e}")
+        await callback.message.answer(f"❌ Xatolik: {e}")
     finally:
         db.close()
 
@@ -271,5 +293,28 @@ async def confirm_save(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "omr_discard")
 async def discard_result(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("Bekor qilindi.")
+    # 🔥 Xabarni tahrirlaymiz
+    await callback.message.edit_text("🗑 Bekor qilindi.")
+    await callback.answer()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("fix_"))
+async def fix_question_callback(callback: CallbackQuery, state: FSMContext):
+    qnum = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    ambiguous_qs = data.get("ambiguous_questions", [])
+
+    if qnum not in ambiguous_qs:
+        await callback.answer("Bu savol noaniq emas.", show_alert=True)
+        return
+
+    # 🔥 Xabarni tahrirlaymiz
+    await callback.message.edit_text(
+        f"📝 <b>{qnum}-savol</b>\n\n"
+        f"Toʻgʻri javobni yozing:\n"
+        f"• <code>{qnum}a</code> — A\n"
+        f"• <code>{qnum}b</code> — B\n"
+        f"• <code>{qnum}x</code> — Boʻsh\n\n"
+        f"<i>Yoki barchasini birga yuboring.</i>"
+    )
     await callback.answer()

@@ -54,6 +54,8 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 
+from app.config import settings  # .env dan o'qish uchun
+
 
 # ============================================================
 # PAGE CONFIG
@@ -1216,7 +1218,7 @@ def generate_answer_sheet(
     student: Student,
     exam: Exam,
     booklet: Booklet,
-    brand_name: str = "ME'ROJ",
+    brand_name = getattr(settings, "BRAND_NAME", "ME'ROJ")
 ):
     """
     Javoblar varaqasini PDF qilib yaratadi.

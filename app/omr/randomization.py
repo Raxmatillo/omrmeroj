@@ -97,6 +97,11 @@ def build_shuffled_booklet(questions: list[dict], seed: str) -> tuple[list[dict]
                 "fan": q["fan"],
                 "ball": q["ball"],
                 "correct_letter_shown_to_student": correct_shown_letter,
+                "savol_html": q.get("savol_html", ""),  # QO'SHING
+                "variant_a_html": q.get("variant_a_html", ""),  # QO'SHING
+                "variant_b_html": q.get("variant_b_html", ""),  # QO'SHING
+                "variant_c_html": q.get("variant_c_html", ""),  # QO'SHING
+                "variant_d_html": q.get("variant_d_html", ""),  # QO'SHING
                 "letter_to_original_option": letter_to_original_option,
                 "original_question_id": q["id"],
             }

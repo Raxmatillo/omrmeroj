@@ -17,6 +17,7 @@ from app.security import (
     verify_code_hash,
 )
 from app.services.telegram import send_telegram_message
+from app.services.verification import create_and_queue_code_or_raise_http as _create_and_queue_code
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -24,38 +25,6 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # ---------------------------------------------------------------------
 # Ichki yordamchi funksiyalar
 # ---------------------------------------------------------------------
-
-def _create_and_queue_code(db: Session, phone: str, purpose: str) -> str:
-    """Cooldown'ni tekshiradi, yangi kod yaratib DB'ga yozadi va uni
-    (hali yubormasdan) qaytaradi -- chaqiruvchi shu kodni Telegram orqali
-    yuboradi."""
-    cooldown = timedelta(seconds=settings.VERIFICATION_CODE_RESEND_COOLDOWN_SECONDS)
-    last = (
-        db.query(models.PhoneVerificationCode)
-        .filter(
-            models.PhoneVerificationCode.phone == phone,
-            models.PhoneVerificationCode.purpose == purpose,
-        )
-        .order_by(models.PhoneVerificationCode.created_at.desc())
-        .first()
-    )
-    if last and datetime.utcnow() - last.created_at < cooldown:
-        wait_seconds = int((cooldown - (datetime.utcnow() - last.created_at)).total_seconds())
-        raise HTTPException(
-            status_code=429,
-            detail=f"Iltimos {max(wait_seconds, 1)} soniyadan keyin qayta urining",
-        )
-
-    code = generate_verification_code()
-    record = models.PhoneVerificationCode(
-        phone=phone,
-        code_hash=hash_code(code),
-        purpose=purpose,
-        expires_at=datetime.utcnow() + timedelta(minutes=settings.VERIFICATION_CODE_TTL_MINUTES),
-    )
-    db.add(record)
-    db.commit()
-    return code
 
 
 def _consume_valid_code(db: Session, phone: str, code: str, purpose: str) -> None:
@@ -198,6 +167,53 @@ def register_verify(payload: schemas.RegisterVerifyIn, db: Session = Depends(get
     token = create_access_token(user.id, user.role.value)
     return schemas.TokenOut(access_token=token)
 
+@router.post("/change-phone-request", response_model=schemas.RequestCodeOut)
+def change_phone_request(
+    payload: schemas.ChangePhoneRequestIn,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Telefon raqamni almashtirish -- 1-bosqich. Bu yerda kod DARHOL
+    yaratilmaydi (parol/ismni o'zgartirishdan farqli, chunki yangi
+    raqamning HAQIQIY egasi ekanini faqat Telegram tasdiqlashi mumkin).
+    Kod bot orqali -- foydalanuvchi shu yangi raqam ulangan Telegram
+    hisobidan kontakt yuborganda -- yaratiladi (bot/handlers/contact.py).
+    """
+    if payload.new_phone == user.phone:
+        raise HTTPException(status_code=400, detail="Bu allaqachon sizning joriy raqamingiz")
+
+    existing = db.query(models.User).filter(models.User.phone == payload.new_phone).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Bu telefon raqami boshqa hisobga tegishli")
+
+    return schemas.RequestCodeOut(
+        sent=False,
+        detail=(
+            "Iltimos, Telegram botga o'ting va yangi raqamingiz ulangan "
+            "SIM-kartadan kontaktni yuboring -- bot sizga tasdiqlash "
+            "kodini yuboradi."
+        ),
+    )
+
+
+@router.post("/change-phone-verify", response_model=schemas.UserOut)
+def change_phone_verify(
+    payload: schemas.ChangePhoneVerifyIn,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _consume_valid_code(db, payload.new_phone, payload.code, purpose="change_phone")
+
+    # Race-condition himoyasi: kod yaratilgandan keyin ham raqam band bo'lib qolgan bo'lishi mumkin
+    existing = db.query(models.User).filter(models.User.phone == payload.new_phone).first()
+    if existing and existing.id != user.id:
+        raise HTTPException(status_code=400, detail="Bu telefon raqami boshqa hisobga tegishli")
+
+    user.phone = payload.new_phone
+    db.commit()
+    db.refresh(user)
+    return user
 
 # ---------------------------------------------------------------------
 # LOGIN (telefon + parol)
@@ -234,16 +250,33 @@ async def forgot_password(payload: schemas.ForgotPasswordIn, db: Session = Depen
         raise HTTPException(status_code=403, detail="Akkaunt faol emas")
 
     code = _create_and_queue_code(db, user.phone, purpose="reset_password")
+    
+    from app.services.telegram import make_copy_button_keyboard, send_telegram_message
+    
+    reply_markup = make_copy_button_keyboard(code, purpose="reset_password", phone=user.phone)
+    
+    text = (
+        f"🔐 <b>Parolni tiklash so'rovi</b>\n\n"
+        f"📱 Telefon raqam: <code>{user.phone}</code>\n"
+        f"🔑 <b>Tasdiqlash kodi:</b> <code>{code}</code>\n\n"
+        f"⏳ Kod <b>{settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa</b> amal qiladi.\n\n"
+        f"━━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ <b>MUHIM!</b> Agar bu Siz boshlamagan bo'lmasangiz,"
+        f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n"
+        f"━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📌 Saytga qaytib, ushbu kodni kiriting va parolni yangilang."
+    )
+    
     sent = await send_telegram_message(
         user.telegram_id,
-        f"Parolni tiklash kodi: {code}\n"
-        f"Kod {settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa amal qiladi. Hech kimga bermang.",
+        text,
+        reply_markup=reply_markup,
     )
+    
     if not sent:
         raise HTTPException(status_code=502, detail="Telegram orqali kod yuborib bo'lmadi, birozdan keyin urinib ko'ring")
 
     return schemas.RequestCodeOut(sent=True, detail="Kod Telegram botga yuborildi")
-
 
 @router.post("/reset-password", response_model=schemas.TokenOut)
 def reset_password(payload: schemas.ResetPasswordIn, db: Session = Depends(get_db)):
@@ -284,3 +317,93 @@ def change_password(payload: schemas.ChangePasswordIn,
     db.commit()
     token = create_access_token(user.id, user.role.value)
     return schemas.TokenOut(access_token=token)
+
+
+# Delete account
+@router.post("/delete-account-request", response_model=schemas.RequestCodeOut)
+async def delete_account_request(
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Hisobni o'chirish so'rovi. Telegram orqali tasdiqlash kodi yuboriladi.
+    """
+    if not user.telegram_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Telegram bog'lanmagan. Iltimos, avval botga o'tib, telefon raqamingizni yuboring."
+        )
+    
+    code = _create_and_queue_code(db, user.phone, purpose="delete_account")
+    
+    from app.services.telegram import make_copy_button_keyboard, send_telegram_message
+    
+    reply_markup = make_copy_button_keyboard(code, purpose="delete_account", phone=user.phone)
+    
+    text = (
+        f"🗑️ <b>Hisobni o'chirish so'rovi</b>\n\n"
+        f"📱 Telefon raqam: <code>{user.phone}</code>\n"
+        f"🔐 <b>Tasdiqlash kodi:</b> <code>{code}</code>\n\n"
+        f"⏳ Kod <b>{settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa</b> amal qiladi.\n\n"
+        f"⚠️ <b>DIQQAT!</b> Hisobni o'chirish bilan quyidagi ma'lumotlar butunlay yo'qoladi:\n"
+        f"• Guruhlar va o'quvchilar\n"
+        f"• Testlar va variantlar\n"
+        f"• Imtihonlar va natijalar\n"
+        f"• Barcha yuklangan fayllar\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ <b>MUHIM!</b> Agar bu Siz boshlamagan bo'lmasangiz,"
+        f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📌 Saytga qaytib, ushbu kodni kiriting va hisobni o'chirishni yakunlang."
+    )
+    
+    sent = await send_telegram_message(user.telegram_id, text, reply_markup)
+    if not sent:
+        raise HTTPException(status_code=502, detail="Telegram orqali kod yuborib bo'lmadi, birozdan keyin urinib ko'ring")
+    
+    return schemas.RequestCodeOut(sent=True, detail="Tasdiqlash kodi Telegram botga yuborildi")
+
+
+# auth.py
+
+@router.post("/cancel-code")
+def cancel_code(payload: schemas.CancelCodeIn, db: Session = Depends(get_db)):
+    # Debug uchun log qo'shamiz
+    print(f"🔍 Cancel code: phone={payload.phone}, purpose={payload.purpose}")
+    
+    record = (
+        db.query(models.PhoneVerificationCode)
+        .filter(
+            models.PhoneVerificationCode.phone == payload.phone,
+            models.PhoneVerificationCode.purpose == payload.purpose,
+            models.PhoneVerificationCode.is_used.is_(False),
+        )
+        .order_by(models.PhoneVerificationCode.created_at.desc())
+        .first()
+    )
+    
+    if record:
+        print(f"✅ Kod topildi: {record.code_hash}, id={record.id}")
+        record.is_used = True
+        db.commit()
+        return {"ok": True, "message": "Kod bekor qilindi"}
+    
+    print("❌ Kod topilmadi")
+    return {"ok": False, "message": "Kod topilmadi"}
+
+@router.post("/delete-account-confirm")
+async def delete_account_confirm(
+    payload: schemas.DeleteAccountConfirmIn,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Hisobni o'chirishni tasdiqlash. Kodni tekshiradi va barcha ma'lumotlarni o'chiradi.
+    """
+    _consume_valid_code(db, user.phone, payload.code, purpose="delete_account")
+    
+    # Foydalanuvchini va unga tegishli barcha ma'lumotlarni o'chirish
+    from app.services.account_service import delete_user_account
+    delete_user_account(db, user)
+    
+    return {"ok": True, "message": "Hisob muvaffaqiyatli o'chirildi"}

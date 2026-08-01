@@ -180,6 +180,8 @@ class Exam(Base):
     group_id = Column(String, ForeignKey("groups.id"), nullable=False)
     test_set_id = Column(String, ForeignKey("test_sets.id"), nullable=False)
 
+    name = Column(String, nullable=True)  # foydalanuvchi kiritadi
+
     exam_code = Column(String, unique=True, nullable=False)  # "EX-4F7A2C" -- botga/UI'ga ko'rsatiladi
     total_questions = Column(Integer, nullable=False)
     status = Column(Enum(ExamStatus), default=ExamStatus.draft)

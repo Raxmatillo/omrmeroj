@@ -28,7 +28,7 @@ def create_exam_endpoint(
     try:
         exam, job = create_exam_job(
             db, teacher=user, group_id=payload.group_id, test_set_id=payload.test_set_id,
-            paper_variant_count=payload.paper_variant_count,
+            paper_variant_count=payload.paper_variant_count, name=payload.name,  # YANGI
         )
     except ExamServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -172,6 +172,36 @@ def download_student_answer_sheet(
         filename=f"answer_sheet_{exam_student.booklet_id}.pdf"
     )
 
+@router.get("/{exam_student_id}/ambiguous-questions")
+def get_ambiguous_questions(
+    exam_student_id: str,
+    user: models.User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """
+    Berilgan ExamStudent uchun noaniq savollar ro'yxatini qaytaradi.
+    """
+    exam_student = db.get(models.ExamStudent, exam_student_id)
+    if not exam_student:
+        raise HTTPException(status_code=404, detail="ExamStudent topilmadi")
+    
+    if exam_student.exam.teacher_id != user.id:
+        raise HTTPException(status_code=403, detail="Ruxsat yo'q")
+    
+    # Natija mavjud bo'lsa
+    result = exam_student.result
+    if not result:
+        return {"ambiguous_questions": []}
+    
+    raw_answers = result.raw_answers_json or {}
+    ambiguous_qs = [int(k) for k, v in raw_answers.items() if v == "MULTI"]
+    
+    return {
+        "ambiguous_questions": sorted(ambiguous_qs),
+        "total": len(ambiguous_qs),
+        "student": exam_student.student.full_name,
+        "exam_code": exam_student.exam.exam_code,
+    }
 
 @router.delete("/{exam_id}")
 def delete_exam_endpoint(exam_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):

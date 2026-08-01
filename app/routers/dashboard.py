@@ -20,20 +20,18 @@ def get_dashboard_stats(user: models.User = Depends(require_teacher), db: Sessio
 
     # Oylik imtihonlar (so'nggi 6 oy)
     six_months_ago = datetime.utcnow() - timedelta(days=180)
-    monthly_exams = (
-        db.query(
-            func.date_trunc('month', models.Exam.created_at).label('month'),
-            func.count(models.Exam.id).label('count')
-        )
-        .filter(models.Exam.teacher_id == user.id)
-        .filter(models.Exam.created_at >= six_months_ago)
-        .group_by('month')
-        .order_by('month')
+    exams_recent = (
+        db.query(models.Exam)
+        .filter(models.Exam.teacher_id == user.id, models.Exam.created_at >= six_months_ago)
         .all()
     )
+    month_counts: dict[str, int] = {}
+    for e in exams_recent:
+        key = e.created_at.strftime("%Y-%m")
+        month_counts[key] = month_counts.get(key, 0) + 1
     monthly_data = [
-        {"month": m.month.strftime("%b %Y"), "count": m.count}
-        for m in monthly_exams
+        {"month": datetime.strptime(k, "%Y-%m").strftime("%b %Y"), "count": v}
+        for k, v in sorted(month_counts.items())
     ]
 
     # Fanlar bo'yicha o'rtacha ball (barcha natijalar bo'yicha)
@@ -45,16 +43,13 @@ def get_dashboard_stats(user: models.User = Depends(require_teacher), db: Sessio
     subject_scores = {}
     for r in results:
         if r.per_subject_json:
-            for subject, score in r.per_subject_json.items():
-                if subject not in subject_scores:
-                    subject_scores[subject] = []
-                subject_scores[subject].append(score)
-    
+            for subject, data in r.per_subject_json.items():
+                subject_scores.setdefault(subject, []).append(data.get("score", 0))
+
     subject_avg = [
         {"subject": s, "avg": sum(vals)/len(vals) if vals else 0}
         for s, vals in subject_scores.items()
     ]
-    subject_avg.sort(key=lambda x: x["avg"], reverse=True)
 
     # Eng ko'p o'quvchili guruhlar
     top_groups = (

@@ -65,6 +65,22 @@ import cv2
 import numpy as np
 
 
+from typing import Optional
+import logging
+from PIL import Image
+# Image.MAX_IMAGE_PIXELS = 200_000_000  # 200 MP gacha ruxsat
+
+
+
+logger = logging.getLogger(__name__)
+
+try:
+    from pyzbar.pyzbar import decode as pyzbar_decode
+    PYZBAR_AVAILABLE = True
+except ImportError:
+    PYZBAR_AVAILABLE = False
+    logger.warning("pyzbar o‘rnatilmagan, QR kodni faqat OpenCV orqali o‘qish mumkin.")
+
 # ============================================================
 # LAYOUT KONSTANTALARI
 #
@@ -77,7 +93,7 @@ PAGE_HEIGHT_MM = 297.0
 
 # Ishlaydigan chop etish DPI'si (perspective-correction
 # natijasi shu DPI'ga standartlashtiriladi)
-TARGET_DPI = 300
+TARGET_DPI = 400
 PX_PER_MM = TARGET_DPI / 25.4
 
 OUTPUT_WIDTH = round(PAGE_WIDTH_MM * PX_PER_MM)    # ~2480
@@ -128,7 +144,7 @@ PDF_EXTENSIONS = {".pdf"}
 # Rasm sifatini tekshirish -- Laplacian variance shu qiymatdan past
 # bo'lsa, foto "juda xira" deb hisoblanadi (natija baribir qaytariladi,
 # lekin ogohlantirish bilan).
-BLUR_VARIANCE_THRESHOLD = 60.0
+BLUR_VARIANCE_THRESHOLD = 80 #60.0
 
 # ============================================================
 # TEST VARIANTI bubble maydoni -- app/omr/answer_sheet_generator.py
@@ -167,31 +183,29 @@ class QuestionResult:
 # RASMNI / PDF'NI YUKLASH
 # ============================================================
 
-def load_image(image_path) -> np.ndarray:
-    """
-    Kiritilgan fayl kengaytmasiga qarab rasmni yuklaydi.
-
-    - .pdf bo'lsa: pdf2image (poppler) yordamida birinchi sahifa
-      TARGET_DPI bilan renderlanadi va OpenCV (BGR) massiviga
-      aylantiriladi.
-    - Aks holda (.jpg, .png, .webp va h.k.): oddiy cv2.imread.
-    """
-
+def load_image(image_path, dpi: int = 400) -> np.ndarray:
     path = Path(image_path)
-    suffix = path.suffix.lower()
-
-    if suffix in PDF_EXTENSIONS:
-        return _load_pdf_first_page(path)
-
-    image = cv2.imread(str(path))
-
-    if image is None:
-        raise ValueError(f"Rasmni ochib bo'lmadi: {image_path}")
-
+    if path.suffix.lower() in PDF_EXTENSIONS:
+        image = _load_pdf_first_page(path, dpi=dpi)
+    else:
+        image = cv2.imread(str(path))
+        if image is None:
+            raise ValueError(f"Rasmni ochib bo'lmadi: {image_path}")
+    
+    # Agar juda katta bo'lsa, kichraytiramiz
+    h, w = image.shape[:2]
+    max_pixels = 30_000_000  # 30 MP yetarli (A4 300 DPI ~8.7 MP)
+    if h * w > max_pixels:
+        scale = (max_pixels / (h * w)) ** 0.5
+        new_w = int(w * scale)
+        new_h = int(h * scale)
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        # Log qo'shish mumkin
+        logger.info(f"Rasm o'lchami {w}x{h} → {new_w}x{new_h} gacha kichraytirildi")
     return image
 
 
-def _load_pdf_first_page(pdf_path: Path) -> np.ndarray:
+def _load_pdf_first_page(pdf_path: Path, dpi: int = 400) -> np.ndarray:
 
     try:
         from pdf2image import convert_from_path
@@ -220,24 +234,37 @@ def to_gray(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
+
 def make_binary(gray: np.ndarray) -> np.ndarray:
-    """
-    Yorug'lik bir xil bo'lmagan fotolar uchun adaptive threshold.
-    Natija: qalam/marker izlari = 255 (oq), qog'oz = 0 (qora).
-    """
-
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
+    block_size = max(15, (min(gray.shape) // 20) | 1)  # toq
     binary = cv2.adaptiveThreshold(
-        blurred,
-        255,
+        blurred, 255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
-        35,
-        12,
+        block_size,
+        8,  # C ni 8 ga tushiring
     )
-
     return binary
+
+# def make_binary(gray: np.ndarray) -> np.ndarray:
+#     """
+#     Yorug'lik bir xil bo'lmagan fotolar uchun adaptive threshold.
+#     Natija: qalam/marker izlari = 255 (oq), qog'oz = 0 (qora).
+#     """
+
+#     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+
+#     binary = cv2.adaptiveThreshold(
+#         blurred,
+#         255,
+#         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+#         cv2.THRESH_BINARY_INV,
+#         35,
+#         12,
+#     )
+
+#     return binary
 
 
 # ============================================================
@@ -273,37 +300,63 @@ def assess_image_quality(gray: np.ndarray) -> List[str]:
 # QR KOD O'QISH
 # ============================================================
 
+
+def _enhance_for_qr(image: np.ndarray) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    return clahe.apply(gray)
+
 def read_qr_code(image: np.ndarray) -> Optional[str]:
     """
-    Rasmda QR kod bo'lsa, uni o'qib matn/ID qiymatini qaytaradi.
-    Topilmasa None qaytaradi.
+    Rasmda QR kodni topish uchun bir nechta usulni sinab ko‘radi:
+      1. OpenCV QRCodeDetector (tez, o‘rnatilgan)
+      2. pyzbar (aniqroq, lekin sekinroq)
 
-    OpenCV'ning o'rnatilgan QRCodeDetector'i ishlatiladi (qo'shimcha
-    kutubxona shart emas). QR kod varaqning istalgan joyida bo'lishi
-    mumkin -- butun rasm bo'ylab qidiradi, aniq koordinataga bog'liq
-    emas.
+    Agar biron usul topilsa, matn/ID qaytaradi, aks holda None.
     """
-
+    # 1. OpenCV QRCodeDetector
     detector = cv2.QRCodeDetector()
-
     try:
-        # Ba'zi OpenCV versiyalarida bir nechta QR kodni bir yo'la
-        # aniqlash mumkin (detectAndDecodeMulti). Avval shuni sinab
-        # ko'ramiz, bo'lmasa oddiy detectAndDecode'ga o'tamiz.
+        # Multi detektorni sinab ko‘ramiz
         ok, decoded_info, points, _ = detector.detectAndDecodeMulti(image)
-        if ok:
+        if ok and decoded_info:
             values = [v for v in decoded_info if v]
             if values:
                 return values[0]
     except (cv2.error, AttributeError):
         pass
 
-    data, points, _ = detector.detectAndDecode(image)
+    # Oddiy detectAndDecode
+    try:
+        data, points, _ = detector.detectAndDecode(image)
+        if data:
+            return data
+    except cv2.error:
+        pass
 
-    if data:
-        return data
+    # 2. pyzbar (agar mavjud bo‘lsa)
+    if PYZBAR_AVAILABLE:
+        enhanced = _enhance_for_qr(image)
+        decoded_objects = pyzbar_decode(enhanced)
+
+        try:
+            # Rasmni grayscale ga o‘tkazamiz (pyzbar uchun)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # pyzbar decode
+            # decoded_objects = pyzbar_decode(gray)
+            for obj in decoded_objects:
+                if obj.type == 'QRCODE':
+                    data = obj.data.decode('utf-8')
+                    if data:
+                        return data
+        except Exception as e:
+            logger.debug("pyzbar decode xatosi: %s", e)
+
+    # 3. Agar rasm rangli bo‘lsa va pyzbar ishlamasa, boshqa yondashuvlar qo‘shish mumkin
+    # Masalan: PIL bilan o‘qish, lekin hozircha yetarli
 
     return None
+
 
 
 # ============================================================

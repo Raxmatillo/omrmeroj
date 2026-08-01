@@ -75,10 +75,17 @@ def _assign_paper_variants(students: list[models.Student], variant_count: int, r
 
 def _question_to_dict(q: models.Question) -> dict:
     return {
-        "id": q.id, "tartib": q.tartib, "fan": q.fan, "ball": q.ball,
-        "savol_html": q.savol_html, "savol_rasm_url": q.savol_rasm_url, "jadval_html": q.jadval_html,
-        "variant_a_html": q.variant_a_html, "variant_b_html": q.variant_b_html,
-        "variant_c_html": q.variant_c_html, "variant_d_html": q.variant_d_html,
+        "id": q.id, 
+        "tartib": q.tartib, 
+        "fan": q.fan, 
+        "ball": q.ball,
+        "savol_html": q.savol_html,  # BU MUHIM
+        "savol_rasm_url": q.savol_rasm_url, 
+        "jadval_html": q.jadval_html,
+        "variant_a_html": q.variant_a_html,  # BU MUHIM
+        "variant_b_html": q.variant_b_html,  # BU MUHIM
+        "variant_c_html": q.variant_c_html,  # BU MUHIM
+        "variant_d_html": q.variant_d_html,  # BU MUHIM
         "togri_javob": q.togri_javob,
     }
 
@@ -134,7 +141,7 @@ def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
     return blocks
 def create_exam_job(
     db: Session, teacher: models.User, group_id: str, test_set_id: str,
-    paper_variant_count: int = 1,
+    paper_variant_count: int = 1, name: str | None = None,  # YANGI
 ) -> tuple[models.Exam, models.ProcessingJob]:
     """Faqat Exam + ProcessingJob yozuvlarini yaratadi (tez, sinxron).
     Haqiqiy PDF generatsiyasi _run_exam_generation() orqali orqada ishlaydi."""
@@ -160,6 +167,7 @@ def create_exam_job(
         raise ExamServiceError("Guruhda faol o'quvchi yo'q")
 
     exam = models.Exam(
+        name=name,  # YANGI
         teacher_id=teacher.id, group_id=group.id, test_set_id=test_set.id,
         exam_code=_generate_exam_code(), total_questions=test_set.total_questions,
         status=models.ExamStatus.generating,

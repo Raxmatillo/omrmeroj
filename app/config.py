@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     PHONE_MAX_LENGTH: int = 9
     PHONE_ALLOWED_OPERATORS: str = "90,91,93,94,95,97,98,99,33,88,77,55,50"
 
+    BACKEND_URL: str = "http://localhost:8000"
+    BRAND_NAME: str = "ME'ROJ"
+
+
     @property
     def CORS_ORIGINS_LIST(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]

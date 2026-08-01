@@ -117,6 +117,8 @@ def download_result_pdf(result_id: str, user: models.User = Depends(require_teac
     return FileResponse(result.result_pdf_path, media_type="application/pdf",
                          filename=f"natija_{result_id}.pdf")
 
+# app/routers/results.py
+
 def _build_result_detail(result: models.Result) -> schemas.ResultDetailOut:
     exam_student = result.exam_student
     answer_key = exam_student.answer_key_json
@@ -143,6 +145,11 @@ def _build_result_detail(result: models.Result) -> schemas.ResultDetailOut:
             given=None if given == "MULTI" else given,
             correct_letter=correct_letter,
             status=status,
+            savol_html=meta.get("savol_html"),  # qo'shildi
+            variant_a_html=meta.get("variant_a_html"),  # qo'shildi
+            variant_b_html=meta.get("variant_b_html"),  # qo'shildi
+            variant_c_html=meta.get("variant_c_html"),  # qo'shildi
+            variant_d_html=meta.get("variant_d_html"),  # qo'shildi
         ))
 
     return schemas.ResultDetailOut(
@@ -161,7 +168,6 @@ def _build_result_detail(result: models.Result) -> schemas.ResultDetailOut:
         expected_paper_variant=exam_student.paper_variant_number,
         questions=questions,
     )
-
 
 @router.get("/{result_id}/detail", response_model=schemas.ResultDetailOut)
 def get_result_detail(result_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
@@ -200,6 +206,8 @@ def manual_correction_endpoint(
     result = apply_manual_corrections(db, result, normalized)
 
     return _build_result_detail(result)
+
+
 
 @router.get("/{result_id}/public")
 def download_result_pdf_public(result_id: str, token: str, db: Session = Depends(get_db)):
