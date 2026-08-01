@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from aiogram import Bot, Dispatcher
 import uvicorn
+from fastapi.middleware.cors import CORSMiddleware
+
 
 from app.config import settings
 from app.database import engine
@@ -26,6 +28,18 @@ async def lifespan(app: FastAPI):
     await bot.session.close()
 
 app = FastAPI(title="OMR Meroj API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://omrmeroj.vercel.app",           # Vercel frontend
+        "http://localhost:5173",                  # Local Vite
+        "http://localhost:3000",                  # Local React
+        "https://omrmeroj.onrender.com",          # Backend o'zi
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Routerlar
 app.include_router(auth.router)
