@@ -31,7 +31,8 @@ app = FastAPI(title="OMR Meroj API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://omrmeroj.vercel.app",           # Vercel frontend
+        "https://omr.meroj.uz",
+        "https://omrmeroj-frontend-hlwl.vercel.app",
         "http://localhost:5173",                  # Local Vite
         "http://localhost:3000",                  # Local React
         "https://omrmeroj.onrender.com",          # Backend o'zi
