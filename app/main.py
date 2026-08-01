@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
 from app.config import settings
-from app.routers import auth, groups, tests, uploads, exams, results
+from app.routers import auth, groups, tests, uploads, exams, results, dashboard
 
 # Hozircha Alembic migratsiyasiz -- jadvallar to'g'ridan-to'g'ri yaratiladi.
 # Productionga chiqishdan oldin buni Alembic'ga almashtirish TAVSIYA ETILADI
@@ -28,6 +28,7 @@ app.include_router(tests.router)
 app.include_router(uploads.router)
 app.include_router(exams.router)
 app.include_router(results.router)
+app.include_router(dashboard.router)
 
 # Dev fallback rasm serving (Supabase ulanganda kerak bo'lmaydi)
 import os

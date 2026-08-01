@@ -108,17 +108,20 @@ NOT_LINKED_DETAIL = (
 #   3) Sayt: POST /auth/register-verify { phone, code } -- kod to'g'ri
 #      bo'lsa is_verified=True qilib, token qaytaradi (avtomatik login).
 #
-
 @router.post("/dev-register", response_model=schemas.TokenOut)
 def dev_register(payload: schemas.RegisterRequestIn, db: Session = Depends(get_db)):
-    """FAQAT DEV_MODE=true bo'lganda ishlaydi -- Telegram bot orqali
-    tasdiqlashni chetlab o'tib, to'g'ridan-to'g'ri faollashtirilgan
-    teacher yaratadi. Productionda albatta DEV_MODE=false bo'lishi
-    shart (bu holda 404 qaytaradi -- yashirin endpoint)."""
     if not settings.DEV_MODE:
         raise HTTPException(status_code=404, detail="Not Found")
 
     user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    
+    # AGAR FOYDALANUVCHI ALLAQACHON MAVJUD VA FAOLLASHTIRILGAN BO'LSA
+    if user and user.is_verified:
+        raise HTTPException(
+            status_code=400, 
+            detail="Ushbu telefon raqami orqali allaqachon ro'yxatdan o'tilgan. Iltimos, tizimga kiring."
+        )
+
     if not user:
         user = models.User(
             phone=payload.phone,
@@ -132,25 +135,33 @@ def dev_register(payload: schemas.RegisterRequestIn, db: Session = Depends(get_d
         user.full_name = payload.full_name
         user.password_hash = hash_password(payload.password)
         user.is_verified = True
+
     db.commit()
     db.refresh(user)
 
     token = create_access_token(user.id, user.role.value)
     return schemas.TokenOut(access_token=token)
 
-# (bu kod sizda allaqachon bor, faqat ishlatilish tartibi)
+
 @router.post("/register-request", response_model=schemas.RequestCodeOut)
 async def register_request(payload: schemas.RegisterRequestIn, db: Session = Depends(get_db)):
-    # Telefon raqam tekshiriladi
     user = db.query(models.User).filter(models.User.phone == payload.phone).first()
+    
+    # Tekshiruv tartibi to'g'rilandi:
     if user:
         if user.is_verified:
-            raise HTTPException(status_code=400, detail="Bu raqam allaqachon faollashtirilgan")
+            raise HTTPException(
+                status_code=400, 
+                detail="Ushbu telefon raqami allaqachon ro'yxatdan o'tgan va faollashtirilgan. Tizimga kiring."
+            )
         if user.telegram_id:
-            # Agar telegram_id mavjud bo'lsa, demak kontakt yuborilgan
-            raise HTTPException(status_code=400, detail="Bu raqam allaqachon bog'langan")
-    
-    # Yangi user yaratamiz yoki mavjudini yangilaymiz
+            # Bot orqali raqam bog'langan, lekin hali kod tasdiqlanmagan bo'lsa
+            raise HTTPException(
+                status_code=400, 
+                detail="Bu raqam botga bog'langan, iltimos kelgan kodni kiriting yoki qayta botdan kod oling."
+            )
+
+    # Yangi user yaratamiz yoki vaqtinchalik hisobni yangilaymiz
     if not user:
         user = models.User(
             phone=payload.phone,
@@ -166,14 +177,13 @@ async def register_request(payload: schemas.RegisterRequestIn, db: Session = Dep
         user.password_hash = hash_password(payload.password)
         user.is_verified = False
         user.telegram_id = None
+        
     db.commit()
-    
-    # KOD YUBORILMAYDI! Faqat botga havola
+
     return schemas.RequestCodeOut(
         sent=False,
         detail="Iltimos, botga o'tib telefon raqamingizni yuboring: @merojuzbot"
     )
-
 @router.post("/register-verify", response_model=schemas.TokenOut)
 def register_verify(payload: schemas.RegisterVerifyIn, db: Session = Depends(get_db)):
     user = db.query(models.User).filter(models.User.phone == payload.phone).first()

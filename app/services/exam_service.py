@@ -176,19 +176,26 @@ def create_exam_job(
 
 
 def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> None:
-    """BackgroundTasks orqali chaqiriladi -- o'z SessionLocal()ini ochadi
-    (request session'idan mustaqil, chunki request allaqachon tugagan
-    bo'ladi)."""
     from app.database import SessionLocal
     db = SessionLocal()
     try:
         exam = db.get(models.Exam, exam_id)
         job = db.get(models.ProcessingJob, job_id)
+        if not exam or not job:
+            logger.error("Exam yoki job topilmadi")
+            return
+
         job.status = models.JobStatus.processing
         db.commit()
 
-        group = exam.group
-        test_set = exam.test_set
+        # ✅ Tuzatish: group va test_set ni alohida olish
+        group = db.get(models.Group, exam.group_id)
+        if not group:
+            raise ExamServiceError("Guruh topilmadi")
+        test_set = db.get(models.TestSet, exam.test_set_id)
+        if not test_set:
+            raise ExamServiceError("Test to'plami topilmadi")
+
         test_variants = (
             db.query(models.Variant)
             .filter(models.Variant.test_set_id == test_set.id)
@@ -196,6 +203,11 @@ def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> 
             .all()
         )
         students = [s for s in group.students if s.is_active]
+
+        if not test_variants:
+            raise ExamServiceError("Test to'plamida variantlar mavjud emas")
+        if not students:
+            raise ExamServiceError("Guruhda faol o'quvchilar mavjud emas")
 
         # --- pastdagi blok eski create_exam() dagi try/except bilan AYNAN BIR XIL
         #     (variant taqsimlash, booklet+javob varag'i generatsiyasi, ZIP) ---
@@ -272,18 +284,20 @@ def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> 
                 zf.write(f, arcname=f"Javoblar_varaqasi/{f.name}")
 
         exam.status = models.ExamStatus.ready
-        exam.zip_path = str(zip_path)
+        exam.zip_path = str(zip_path)   # <-- bu qator muhim
         job.status = models.JobStatus.completed
         job.progress = 100
         db.commit()
 
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         db.rollback()
         exam = db.get(models.Exam, exam_id)
         job = db.get(models.ProcessingJob, job_id)
-        exam.status = models.ExamStatus.failed
-        job.status = models.JobStatus.failed
-        job.error_message = str(e)
+        if exam:
+            exam.status = models.ExamStatus.failed
+        if job:
+            job.status = models.JobStatus.failed
+            job.error_message = str(e)
         db.commit()
         logger.exception("Exam generatsiyasida xato: exam_id=%s", exam_id)
     finally:

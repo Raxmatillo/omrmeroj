@@ -155,12 +155,28 @@ async def import_excel(variant_id: str, file: UploadFile = File(...),
     """Tayyor Excel shablonidan tezkor savol qo'shish (oddiy matnli
     savollar uchun -- rasm/formula kerak bo'lsa admin panelda qo'lda
     to'ldiriladi/tahrirlanadi)."""
+    
     variant = _get_owned_variant(variant_id, user, db)
+    test_set = db.get(models.TestSet, variant.test_set_id)
+    if not test_set:
+        raise HTTPException(status_code=404, detail="TestSet topilmadi")
+    
     content = await file.read()
     try:
         rows = parse_excel(BytesIO(content))
     except ExcelImportError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+    # MUHIM: Savollar sonini tekshirish
+    existing_count = len(variant.questions)
+    if existing_count + len(rows) > test_set.total_questions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Jami savollar soni {test_set.total_questions} dan oshib ketadi. "
+                   f"Mavjud: {existing_count}, qo'shilmoqchi: {len(rows)}"
+        )
+    
 
     existing_max = max((q.tartib for q in variant.questions), default=0)
     created = []
