@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "http://localhost:8000"
     BRAND_NAME: str = "ME'ROJ"
 
+    # Bot -> backend server-to-server chaqiruvlari uchun umumiy sir
+    # (masalan POST /auth/cancel-code). Bu endpoint foydalanuvchi hali
+    # login qilmagan bo'lishi mumkin bo'lgan bosqichda ham chaqirilishi
+    # kerak bo'lgani uchun JWT talab qila olmaydi -- shuning uchun
+    # o'rniga faqat botga ma'lum bo'lgan shu sir talab qilinadi.
+    # Productionda .env orqali albatta o'zgartiring.
+    INTERNAL_API_SECRET: str = "dev-internal-secret-CHANGE-ME"
+
 
     @property
     def CORS_ORIGINS_LIST(self) -> list[str]:

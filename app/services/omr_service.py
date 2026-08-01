@@ -43,6 +43,14 @@ class OmrError(Exception):
     xatolar uchun (QR o'qilmadi, booklet topilmadi va h.k.)."""
 
 
+class OmrPermissionError(OmrError):
+    """Booklet boshqa teacherning imtihoniga tegishli bo'lganda ko'tariladi.
+    Bu tekshiruv ExamStudent topilgandan KEYIN, lekin mavjud Result
+    o'chirilishidan OLDIN bajarilishi SHART -- aks holda so'ragan teacher
+    ruxsatga ega bo'lmasa ham, boshqa teacherning allaqachon saqlangan
+    natijasi o'chirib yuborilgan bo'lardi."""
+
+
 def _parse_booklet_id(sheet_id_raw: str | None) -> str:
     """
     answer_sheet_generator.create_qr_image() QR ichiga JSON yozadi:
@@ -99,12 +107,24 @@ def _build_download_url(result_id: str) -> str:
     return f"{base_url}/results/{result_id}/public?token={token}"
 
 
-def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "sheet.pdf") -> models.Result:
+def check_answer_sheet(
+    db: Session,
+    file_bytes: bytes,
+    filename_hint: str = "sheet.pdf",
+    requester_teacher_id: str | None = None,
+) -> models.Result:
     """
     file_bytes    -- bot/API orqali kelgan PDF yoki rasm baytlari.
     filename_hint -- asl fayl nomi (yoki kengaytmani bildiruvchi nom,
                      masalan "sheet.jpg"); omr_reader.load_image()
                      kengaytmaga qarab PDF/rasm yuklash yo'lini tanlaydi.
+    requester_teacher_id -- so'rovni yuborayotgan teacher.id. Berilgan
+                     bo'lsa, ExamStudent topilgandan keyin -- lekin
+                     mavjud Result o'chirilishidan OLDIN -- egalik
+                     tekshiriladi (OmrPermissionError). None bo'lsa
+                     (masalan bot orqali public_checking oqimi uchun)
+                     tekshiruv o'tkazib yuboriladi -- ownership'ni
+                     chaqiruvchi o'zi boshqacha yo'l bilan hal qiladi.
     """
     suffix = os.path.splitext(filename_hint)[-1].lower() or ".pdf"
 
@@ -130,7 +150,10 @@ def check_answer_sheet(db: Session, file_bytes: bytes, filename_hint: str = "she
     )
     if not exam_student:
         raise OmrError(f"Booklet ID topilmadi: {booklet_id}")
-        # YANGI KOD:
+
+    if requester_teacher_id is not None and exam_student.exam.teacher_id != requester_teacher_id:
+        raise OmrPermissionError("Bu javob varag'i boshqa teacherning imtihoniga tegishli")
+
     if exam_student.result is not None:
         db.delete(exam_student.result)
         db.flush()

@@ -226,15 +226,6 @@ class ExamOut(BaseModel):
 
 # ---------- NATIJA TAFSILOTI / QO'LDA TUZATISH ----------
 
-class QuestionAnswerDetail(BaseModel):
-    question: int
-    fan: str
-    ball: float
-    given: str | None          # talaba belgilagan harf (yoki None -- bo'sh/noaniq)
-    correct_letter: str        # to'g'ri javob (shu talabaga chiqqan variant bo'yicha)
-    status: str                # "correct" | "incorrect" | "blank" | "ambiguous"
-
-
 class ResultDetailOut(BaseModel):
     id: str
     student: str

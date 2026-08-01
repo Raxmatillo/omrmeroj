@@ -61,19 +61,11 @@ async def handle_contact(message: Message):
     # Faqat o'z raqamini yuborishga ruxsat
     if contact.user_id != message.from_user.id:
         await message.answer(
-            f"✅ <b>Telefon raqam tasdiqlandi!</b>\n\n"
-            f"📱 Raqam: <code>{phone}</code>\n"
-            f"🔐 <b>Tasdiqlash kodi:</b> <code>{code}</code>\n\n"
-            f"⏳ Kod <b>{settings.VERIFICATION_CODE_TTL_MINUTES} daqiqa</b> amal qiladi.\n"
-            f"📋 Kodni nusxalash uchun tugmani bosing va saytga kiriting.\n\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚠️ <b>MUHIM!</b> Agar bu Siz boshlamagan bo'lmasangiz,"
-            f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📌 <a href='https://your-domain.com/verify'>Kodni kiritish sahifasiga o'tish</a>",
-            reply_markup=_code_keyboard(code, purpose="register", phone=phone),
+            "❌ <b>Faqat o'zingizning raqamingizni yuboring</b>\n\n"
+            "Boshqa birovning kontaktini emas, "
+            "pastdagi tugma orqali <b>o'z</b> telefon raqamingizni yuboring.",
+            reply_markup=ReplyKeyboardRemove(),
             parse_mode="HTML",
-            disable_web_page_preview=True,
         )
         return
 
@@ -199,7 +191,7 @@ async def handle_contact(message: Message):
             f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📌 <a href='https://your-domain.com/verify'>Kodni kiritish sahifasiga o'tish</a>",
-            reply_markup=_code_keyboard(code, purpose="register"),  # <-- BU YERDA purpose
+            reply_markup=_code_keyboard(code, purpose="register", phone=phone),  # <-- BU YERDA purpose
             parse_mode="HTML",
             disable_web_page_preview=True,
         )

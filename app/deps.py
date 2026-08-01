@@ -1,8 +1,11 @@
 # -*- coding: utf-8 -*-
-from fastapi import Depends, HTTPException, status
+import secrets
+
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.security import decode_access_token
 from app import models
@@ -47,3 +50,16 @@ def require_superadmin(user: models.User = Depends(get_current_user)) -> models.
     if user.role != models.UserRole.superadmin:
         raise HTTPException(status_code=403, detail="Faqat superadmin uchun")
     return user
+
+
+def require_internal_secret(
+    x_internal_secret: str | None = Header(default=None),
+) -> None:
+    """Faqat bizning bot (server-to-server) chaqirishi mumkin bo'lgan
+    endpointlar uchun (masalan /auth/cancel-code). Foydalanuvchi hali
+    login qilmagan bosqichda ham chaqirilishi kerak bo'lgani uchun JWT
+    o'rniga botga ma'lum bo'lgan umumiy sir talab qilinadi."""
+    if not x_internal_secret or not secrets.compare_digest(
+        x_internal_secret, settings.INTERNAL_API_SECRET
+    ):
+        raise HTTPException(status_code=403, detail="Ruxsat yo'q")

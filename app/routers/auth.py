@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app import models, schemas
 from app.config import settings
 from app.database import get_db
-from app.deps import get_current_user
+from app.deps import get_current_user, require_internal_secret
 from app.security import (
     hash_password,
     verify_password,
@@ -366,11 +366,14 @@ async def delete_account_request(
 
 # auth.py
 
-@router.post("/cancel-code")
+@router.post("/cancel-code", dependencies=[Depends(require_internal_secret)])
 def cancel_code(payload: schemas.CancelCodeIn, db: Session = Depends(get_db)):
-    # Debug uchun log qo'shamiz
-    print(f"🔍 Cancel code: phone={payload.phone}, purpose={payload.purpose}")
-    
+    """FAQAT bot (server-to-server, X-Internal-Secret orqali) chaqirishi
+    mumkin -- foydalanuvchi login qilmagan bosqichda ham (masalan
+    registratsiya kodini bekor qilishda) ishlashi kerak bo'lgani uchun
+    JWT talab qila olmaydi. Shu sababli require_internal_secret orqali
+    himoyalangan -- aks holda istalgan kishi faqat telefon raqamni
+    bilib, boshqa foydalanuvchining kutayotgan kodini bekor qila olardi."""
     record = (
         db.query(models.PhoneVerificationCode)
         .filter(
@@ -381,14 +384,12 @@ def cancel_code(payload: schemas.CancelCodeIn, db: Session = Depends(get_db)):
         .order_by(models.PhoneVerificationCode.created_at.desc())
         .first()
     )
-    
+
     if record:
-        print(f"✅ Kod topildi: {record.code_hash}, id={record.id}")
         record.is_used = True
         db.commit()
         return {"ok": True, "message": "Kod bekor qilindi"}
-    
-    print("❌ Kod topilmadi")
+
     return {"ok": False, "message": "Kod topilmadi"}
 
 @router.post("/delete-account-confirm")

@@ -10,8 +10,7 @@ from app import models, schemas
 from app.database import get_db
 from app.deps import require_teacher
 from app.security import decode_file_access_token
-from app.services.omr_service import check_answer_sheet, OmrError
-from app.services.omr_service import check_answer_sheet, OmrError, apply_manual_corrections
+from app.services.omr_service import check_answer_sheet, OmrError, OmrPermissionError, apply_manual_corrections
 
 router = APIRouter(prefix="/results", tags=["results"])
 
@@ -51,32 +50,35 @@ async def check_answer_sheet_endpoint(
 
     MUHIM (ownership): check_answer_sheet booklet_id orqali ExamStudent'ni
     topib oladi -- lekin bu ExamStudent boshqa teacherga tegishli
-    imtihonga tegishli bo'lishi mumkin. Shuning uchun natija yaratilgach,
-    uning imtihon egasi so'rov yuborgan teacher ekanligi ALOHIDA
-    tekshiriladi (aks holda bir teacher boshqa teacherning javob
-    varag'ini "tasodifan" tekshirib qo'yishi mumkin edi).
+    imtihonga tegishli bo'lishi mumkin. Shuning uchun egalik ExamStudent
+    topilgan ZAHOTI -- Result yaratilishi/o'chirilishidan OLDIN --
+    check_answer_sheet() ichida tekshiriladi (requester_teacher_id orqali,
+    OmrPermissionError ko'tariladi). Bu tekshiruv NATIJA yaratilgandan
+    keyin emas, oldin bo'lishi shart edi: aks holda boshqa teacherning
+    booklet'i yuborilganda, uning ALLAQACHON mavjud bo'lgan Result
+    yozuvi bu funksiya ichida o'chirilib, keyin qayta yaratilib
+    yuborilar edi -- faqat oxirida javob berishdan oldin rad etilgani
+    natijada allaqachon yetkazilgan zararni to'xtatmasdi.
     """
     content = await file.read()
 
     try:
-        result = check_answer_sheet(db, content, filename_hint=file.filename or "sheet.pdf")
+        result = check_answer_sheet(
+            db, content, filename_hint=file.filename or "sheet.pdf",
+            requester_teacher_id=user.id,
+        )
+    except OmrPermissionError as e:
+        # Egalik ExamStudent topilgan zahoti, Result yaratilishidan/
+        # o'chirilishidan OLDIN tekshirilgan (omr_service.check_answer_sheet) --
+        # shu sababli bu yerga tushganda boshqa teacherning mavjud natijasiga
+        # HECH QANDAY tegilmagan bo'ladi.
+        raise HTTPException(status_code=403, detail=str(e))
     except OmrError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    teacher_id = result.exam_student.exam.teacher_id
-    if teacher_id != user.id:
-        # Natija allaqachon DB'da saqlangan (boshqa teacherning booklet'i
-        # bo'lgani uchun) -- lekin so'rov yuborgan teacherga uni
-        # ko'rsatmaymiz. O'chirib tashlamaymiz, chunki haqiqiy javob
-        # varag'i haqiqatan ham tekshirilgan va uning egasi keyinchalik
-        # o'zi ko'radi.
-        raise HTTPException(
-            status_code=403,
-            detail="Bu javob varag'i boshqa teacherning imtihoniga tegishli",
-        )
-
     return {
         "result_id": result.id,
+        "student_id": result.exam_student.student_id,
         "student": result.exam_student.student.full_name,
         "correct_count": result.correct_count,
         "incorrect_count": result.incorrect_count,
