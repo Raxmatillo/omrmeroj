@@ -50,5 +50,6 @@ app.include_router(exams.router)
 app.include_router(results.router)
 app.include_router(uploads.router)
 
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

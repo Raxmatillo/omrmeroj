@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 from pathlib import Path
+from typing import Dict, Any
+
 from app.config import settings
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,8 @@ from app.security import decode_file_access_token
 from app.services.omr_service import check_answer_sheet, OmrError, OmrPermissionError, apply_manual_corrections
 
 router = APIRouter(prefix="/results", tags=["results"])
+
+pending_results: Dict[str, Dict[str, Any]] = {}
 
 
 def _get_owned_result(result_id: str, user: models.User, db: Session) -> models.Result:
@@ -27,69 +31,150 @@ def _get_owned_result(result_id: str, user: models.User, db: Session) -> models.
 
 @router.post("/check")
 async def check_answer_sheet_endpoint(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     user: models.User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
     """
-    Javoblar varag'ini (PDF yoki rasm: jpg/png/webp) yuklab tekshiradi --
-    xuddi Telegram bot qilgani kabi (bot/handlers/omr.py), lekin
-    saytdan/admin paneldan.
-
-    Oqim (app/services/omr_service.py -- check_answer_sheet):
-      1. Fayl baytlari vaqtinchalik faylga yoziladi va
-         app/omr/omr_reader.py -> detect_answer_sheet() chaqiriladi
-         (bubble aniqlash, perspective correction, QR o'qish).
-      2. QR kod ichidan booklet_id ajratib olinadi.
-      3. booklet_id orqali DB'dan ExamStudent (source of truth answer
-         key -- ExamStudent.answer_key_json) topiladi.
-      4. Har bir savol uchun berilgan javob to'g'ri javob bilan
-         solishtiriladi, Result yozuvi yaratiladi va saqlanadi.
-      5. Natija PDF (app/omr/result_pdf_generator.py -> generate_result_pdf)
-         generatsiya qilinadi, Result.result_pdf_path to'ldiriladi.
-
-    MUHIM (ownership): check_answer_sheet booklet_id orqali ExamStudent'ni
-    topib oladi -- lekin bu ExamStudent boshqa teacherga tegishli
-    imtihonga tegishli bo'lishi mumkin. Shuning uchun egalik ExamStudent
-    topilgan ZAHOTI -- Result yaratilishi/o'chirilishidan OLDIN --
-    check_answer_sheet() ichida tekshiriladi (requester_teacher_id orqali,
-    OmrPermissionError ko'tariladi). Bu tekshiruv NATIJA yaratilgandan
-    keyin emas, oldin bo'lishi shart edi: aks holda boshqa teacherning
-    booklet'i yuborilganda, uning ALLAQACHON mavjud bo'lgan Result
-    yozuvi bu funksiya ichida o'chirilib, keyin qayta yaratilib
-    yuborilar edi -- faqat oxirida javob berishdan oldin rad etilgani
-    natijada allaqachon yetkazilgan zararni to'xtatmasdi.
+    Javoblar varag'ini (PDF yoki rasm) yuklab, orqada (background) tekshiradi.
+    Natija tayyor bo'lgach, `pending_results` dan olinadi yoki WebSocket/SSE orqali xabar beriladi.
     """
     content = await file.read()
-
-    try:
-        result = check_answer_sheet(
-            db, content, filename_hint=file.filename or "sheet.pdf",
-            requester_teacher_id=user.id,
-        )
-    except OmrPermissionError as e:
-        # Egalik ExamStudent topilgan zahoti, Result yaratilishidan/
-        # o'chirilishidan OLDIN tekshirilgan (omr_service.check_answer_sheet) --
-        # shu sababli bu yerga tushganda boshqa teacherning mavjud natijasiga
-        # HECH QANDAY tegilmagan bo'ladi.
-        raise HTTPException(status_code=403, detail=str(e))
-    except OmrError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
+    
+    # 1. Faylni vaqtinchalik saqlash yoki ID yaratish
+    import uuid
+    task_id = str(uuid.uuid4())
+    
+    # 2. Background task ga qo'shish
+    background_tasks.add_task(
+        process_omr_background,
+        task_id=task_id,
+        content=content,
+        filename=file.filename or "sheet.pdf",
+        teacher_id=user.id,
+    )
+    
+    # 3. Darhol task ID qaytarish
     return {
-        "result_id": result.id,
-        "student_id": result.exam_student.student_id,
-        "student": result.exam_student.student.full_name,
-        "correct_count": result.correct_count,
-        "incorrect_count": result.incorrect_count,
-        "blank_count": result.blank_count,
-        "ambiguous_count": result.ambiguous_count,
-        "total_score": result.total_score,
-        "per_subject": result.per_subject_json,
-        "status": result.status,
-        "has_pdf": bool(result.result_pdf_path),
+        "status": "processing",
+        "task_id": task_id,
+        "message": "Natija tayyorlanmoqda. Iltimos, birozdan keyin natijani tekshiring.",
+        "check_url": f"/results/check-status/{task_id}"
     }
 
+
+@router.get("/check-status/{task_id}")
+async def get_check_status(
+    task_id: str,
+    user: models.User = Depends(require_teacher),
+):
+    """
+    Background task holatini tekshirish.
+    """
+    if task_id not in pending_results:
+        raise HTTPException(status_code=404, detail="Task topilmadi yoki muddati o'tgan")
+    
+    result = pending_results[task_id]
+    
+    if result.get("status") == "completed":
+        # Natija tayyor, pending dan o'chirish (ixtiyoriy)
+        data = result.get("data")
+        return {
+            "status": "completed",
+            "result": data
+        }
+    elif result.get("status") == "failed":
+        return {
+            "status": "failed",
+            "error": result.get("error", "Noma'lum xatolik")
+        }
+    else:
+        return {
+            "status": "processing",
+            "progress": result.get("progress", 0),
+            "message": "Natija tayyorlanmoqda..."
+        }
+
+
+def process_omr_background(
+    task_id: str,
+    content: bytes,
+    filename: str,
+    teacher_id: str,
+):
+    """
+    Background task: OMR tekshirish va natijani saqlash.
+    """
+    from app.database import SessionLocal
+    db = SessionLocal()
+    
+    try:
+        # Progress yangilash
+        pending_results[task_id] = {"status": "processing", "progress": 10}
+        
+        # 1. OMR tekshirish
+        pending_results[task_id]["progress"] = 30
+        
+        # Tekshirish uchun vaqtinchalik fayl yaratish
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(content)
+            tmp_path = tmp_file.name
+        
+        try:
+            # OMR tekshirish
+            result = check_answer_sheet(
+                db, content, filename_hint=filename,
+                requester_teacher_id=teacher_id,
+            )
+        finally:
+            # Vaqtinchalik faylni o'chirish
+            import os
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        
+        pending_results[task_id]["progress"] = 80
+        
+        # 2. Natijani formatlash
+        result_data = {
+            "result_id": result.id,
+            "student_id": result.exam_student.student_id,
+            "student": result.exam_student.student.full_name,
+            "correct_count": result.correct_count,
+            "incorrect_count": result.incorrect_count,
+            "blank_count": result.blank_count,
+            "ambiguous_count": result.ambiguous_count,
+            "total_score": result.total_score,
+            "per_subject": result.per_subject_json,
+            "status": result.status,
+            "has_pdf": bool(result.result_pdf_path),
+        }
+        
+        pending_results[task_id] = {
+            "status": "completed",
+            "data": result_data,
+            "progress": 100
+        }
+        
+    except OmrPermissionError as e:
+        pending_results[task_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+    except OmrError as e:
+        pending_results[task_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+    except Exception as e:
+        import traceback
+        pending_results[task_id] = {
+            "status": "failed",
+            "error": f"Kutilmagan xatolik: {str(e)}"
+        }
+    finally:
+        db.close()
 
 @router.get("/{result_id}")
 def get_result(result_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
