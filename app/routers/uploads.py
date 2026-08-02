@@ -36,7 +36,12 @@ async def upload_question_image(file: UploadFile = File(...), user: models.User 
         path = os.path.join(settings.UPLOAD_DIR, filename)
         with open(path, "wb") as f:
             f.write(content)
-        url = f"/uploads/files/{filename}"
+        # MUHIM: to'liq (absolute) URL qaytariladi, nisbiy emas.
+        # Bu URL keyinchalik savol_rasm_url sifatida saqlanadi va
+        # booklet PDF generatsiyasida WeasyPrint orqali server tomonda
+        # o'qiladi -- nisbiy "/uploads/files/..." U yerda hech narsaga
+        # nisbatan resolve bo'lmay, rasm har doim yo'qolib qolardi.
+        url = f"{settings.BACKEND_URL}/uploads/files/{filename}"
 
     return {"url": url}
 

@@ -1,52 +1,65 @@
 # -*- coding: utf-8 -*-
-"""
-savol_html / variant_x_html ichidagi $...$ LaTeX ifodalarini PDF'da
-ko'rsatish uchun.
-
-WeasyPrint MathML yoki LaTeX'ni to'g'ridan-to'g'ri render qila olmaydi
-(faqat HTML+CSS). Shuning uchun har bir $...$ segment matplotlib'ning
-`mathtext` mexanizmi orqali kichik PNG rasmga aylantiriladi va HTML
-ichiga <img> sifatida qo'yiladi -- Node/KaTeX kabi tashqi jarayon shart
-emas.
-"""
 from __future__ import annotations
 
 import base64
+import logging
 import re
 from io import BytesIO
 
 import matplotlib
-matplotlib.use("Agg")  # server muhitida GUI kerak emas
+matplotlib.use("Agg")
 from matplotlib import mathtext
 
-_LATEX_INLINE_RE = re.compile(r"\$([^$]+)\$")
+logger = logging.getLogger(__name__)
 
-_parser = mathtext.MathTextParser("agg")
+_LATEX_INLINE_RE = re.compile(r"\\\((.+?)\\\)")
+_LATEX_BLOCK_RE = re.compile(r"\\\[(.+?)\\\]")
 
-
-def render_math_to_data_uri(latex_expr: str, fontsize: float = 11, dpi: int = 200) -> str:
-    buf = BytesIO()
-    _parser.to_png(buf, f"${latex_expr}$", fontsize=fontsize, dpi=dpi)
-    buf.seek(0)
-    encoded = base64.b64encode(buf.read()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
+_FRAC_FIX_RE = re.compile(r"\\frac(\d+)(\d+)")
 
 
-def render_latex_in_html(html: str | None, fontsize: float = 11, dpi: int = 200) -> str:
-    """$...$ ichidagi barcha LaTeX ifodalarni <img> teglariga almashtiradi.
-    Bo'sh/None bo'lsa bo'sh string qaytaradi (savol_rasm_url/jadval_html
-    kabi ixtiyoriy maydonlar uchun)."""
+def _fix_latex(expr: str) -> str:
+    expr = _FRAC_FIX_RE.sub(r"\\frac{\1}{\2}", expr)
+    expr = expr.replace(r"\left", "").replace(r"\right", "")
+    return expr
+
+
+def render_math_to_data_uri(latex_expr: str, fontsize: float = 12, dpi: int = 300) -> str:
+    try:
+        expr = _fix_latex(latex_expr)
+        buf = BytesIO()
+        mathtext.math_to_image(
+            f"${expr}$", buf, dpi=dpi, format="png",
+            prop=matplotlib.font_manager.FontProperties(size=fontsize),
+        )
+        buf.seek(0)
+        encoded = base64.b64encode(buf.read()).decode("ascii")
+        return f"data:image/png;base64,{encoded}"
+    except Exception as e:
+        logger.warning(f"LaTeX render xatolik: {latex_expr} -> {e}")
+        return None
+
+
+def render_latex_in_html(html: str | None, fontsize: float = 12, dpi: int = 300) -> str:
     if not html:
         return ""
 
-    def _replace(match: re.Match) -> str:
-        expr = match.group(1)
-        try:
-            data_uri = render_math_to_data_uri(expr, fontsize=fontsize, dpi=dpi)
-        except Exception:
-            # Render qilib bo'lmasa, sahifa butunlay qulamasin -- asl
-            # matnni saqlab qolamiz, o'qituvchi buni ko'rib tuzatadi.
-            return match.group(0)
-        return f'<img class="latex-inline" src="{data_uri}" alt="{expr}">'
+    def _replace_inline(match: re.Match) -> str:
+        expr = match.group(1).strip()
+        data_uri = render_math_to_data_uri(expr, fontsize=fontsize, dpi=dpi)
+        if data_uri:
+            return f'<img class="latex-inline" src="{data_uri}" alt="{expr}">'
+        else:
+            return f'<code>${expr}$</code>'
 
-    return _LATEX_INLINE_RE.sub(_replace, html)
+    def _replace_block(match: re.Match) -> str:
+        expr = match.group(1).strip()
+        data_uri = render_math_to_data_uri(expr, fontsize=fontsize + 2, dpi=dpi)
+        if data_uri:
+            return f'<div class="latex-block"><img class="latex-block-img" src="{data_uri}" alt="{expr}"></div>'
+        else:
+            return f'<pre>${expr}$</pre>'
+
+    html = _LATEX_INLINE_RE.sub(_replace_inline, html)
+    html = _LATEX_BLOCK_RE.sub(_replace_block, html)
+    return html

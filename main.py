@@ -2,9 +2,11 @@
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from aiogram import Bot, Dispatcher
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
+import os
 
 
 from app.config import settings
@@ -49,6 +51,14 @@ app.include_router(tests.router)
 app.include_router(exams.router)
 app.include_router(results.router)
 app.include_router(uploads.router)
+
+# DEV FALLBACK uchun: Supabase sozlanmagan bo'lsa, uploads.py
+# rasmlarni settings.UPLOAD_DIR papkasiga saqlaydi va
+# "/uploads/files/{filename}" URL qaytaradi -- lekin bu route
+# hech qayerda serve qilinmagani uchun rasm doim 404 bo'lardi
+# (na brauzerda, na PDF generatsiyasida). Shu qator buni tuzatadi.
+os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+app.mount("/uploads/files", StaticFiles(directory=settings.UPLOAD_DIR), name="uploaded-files")
 
 
 if __name__ == "__main__":
