@@ -18,7 +18,7 @@ import uvicorn
 from app.config import settings
 from app.database import engine
 from app import models
-from app.routers import auth, groups, tests, exams, results, uploads
+from app.routers import auth, system, groups, tests, exams, results, uploads, dashboard
 
 
 
@@ -130,11 +130,13 @@ app.add_middleware(
 
 # Routerlar
 app.include_router(auth.router)
+app.include_router(system.router)
 app.include_router(groups.router)
 app.include_router(tests.router)
 app.include_router(exams.router)
 app.include_router(results.router)
 app.include_router(uploads.router)
+app.include_router(dashboard.router)
 
 migrate_old_database()
 
