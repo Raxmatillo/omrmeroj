@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import logging
 import re
 from pathlib import Path
@@ -25,6 +26,24 @@ from app.services.omr_service import (
 
 logger = logging.getLogger("omrmeroj.bot.omr")
 router = Router(name="omr")
+
+# ------------------------------------------------------------------
+# YANGILANISH (tezlik/resurslar): analyze_answer_sheet() va
+# save_result() ICHIDA OpenCV (perspective correction, bubble
+# aniqlash) va PDF generatsiya kabi OG'IR, CPU-band operatsiyalar bor.
+#
+# main.py'dagi lifespan bot polling'ni FastAPI bilan BIR XIL asyncio
+# event loop'ida ishga tushiradi -- ya'ni agar bu funksiyalar shu
+# yerda TO'G'RIDAN-TO'G'RI (await'siz) chaqirilsa, ular butun loop'ni
+# BLOKLAYDI: shu vaqt ichida na bot boshqa xabarlarga javob bera oladi,
+# na FastAPI boshqa so'rovlarni qabul qila oladi (Electron ilova ham
+# shu API'ga ulanganda "qotib qolgandek" ko'rinadi).
+#
+# Yechim: `asyncio.to_thread()` -- CPU-band funksiyani alohida thread'da
+# ishga tushiradi, asosiy event loop bo'shab qoladi. Bu Celery/Redis
+# kabi qo'shimcha infratuzilma talab qilmaydi -- Python'ning o'z ichki
+# thread pool'i yetarli (bitta kompyuterda, past-o'rta yuklama uchun).
+# ------------------------------------------------------------------
 
 
 class ManualCorrectionStates(StatesGroup):
@@ -106,7 +125,10 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
         buffer = await message.bot.download_file(file.file_path)
         file_bytes = buffer.read()
 
-        analysis = analyze_answer_sheet(file_bytes, filename_hint)
+        # YANGI: analyze_answer_sheet() OpenCV bilan ishlaydi (og'ir,
+        # CPU-band) -- asosiy event loop'ni bloklamasligi uchun
+        # alohida thread'da ishga tushiriladi.
+        analysis = await asyncio.to_thread(analyze_answer_sheet, file_bytes, filename_hint)
         scores = compute_scores(db, analysis["booklet_id"], analysis["report"])
 
         exam_student = db.get(models.ExamStudent, scores["exam_student_id"])
@@ -124,7 +146,7 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
             return
 
         preview_path = _save_temp_scan(analysis["report"]["warped_image"], exam_student.id)
-        await status_msg.edit_text(_format_preview(scores, student_name, is_owner))
+        await status_msg.edit_text(_format_preview(scores, student_name, is_owner), parse_mode="HTML")
 
         if not is_owner:
             if scores["ambiguous"] > 0:
@@ -267,7 +289,10 @@ async def confirm_save(callback: CallbackQuery, state: FSMContext):
     db = SessionLocal()
     try:
         warped = cv2.imread(data["pending_preview_path"])
-        result = save_result(db, data["pending_exam_student_id"], data["pending_scores"], warped)
+        # YANGI: save_result() ichida cv2 (rasm saqlash) + PDF generatsiya
+        # (natija hujjati) bor -- OpenCV/ReportLab ishlari CPU-band,
+        # shuning uchun bu ham alohida thread'ga chiqarildi.
+        result = await asyncio.to_thread(save_result, db, data["pending_exam_student_id"], data["pending_scores"], warped)
 
         # 🔥 Xabarni tahrirlaymiz
         await callback.message.edit_text("✅ Natija bazaga saqlandi.")

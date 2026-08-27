@@ -118,6 +118,15 @@ def _build_subject_blocks(questions: list[dict]) -> list[SubjectBlock]:
 
 
 def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
+    """Savollarni ASL tartib bo'yicha saralab, ketma-ket bir xil
+    (fan, ball) segmentlariga bo'ladi -- har bir segment alohida
+    SubjectBlock (masalan: 1-10 'Ona tili' 1.1, 11-20 'Matematika' 1.1,
+    21-30 'Tarix' 1.1, 31-60 'Matematika' 3.1, 61-90 'Fizika' 2.1).
+
+    MUHIM: bu funksiya 'Matematika' nomini ikki marta -- turli ball
+    bilan -- alohida-alohida blok sifatida qaytaradi. Bu ANIQ shu
+    funksiya natijasi asosida _tartib_to_group_label() har bir savolga
+    noyob guruh nomi biriktiradi (pastga qarang)."""
     ordered = sorted(questions, key=lambda q: q["tartib"])
 
     blocks: list[SubjectBlock] = []
@@ -139,6 +148,39 @@ def _build_true_subject_breakdown(questions: list[dict]) -> list[SubjectBlock]:
         blocks.append(SubjectBlock(start=start, end=prev_tartib, subject=fan_name, point=ball))
 
     return blocks
+
+
+def _tartib_to_group_label(questions: list[dict]) -> dict[int, str]:
+    """
+    Har bir savol tartibini, uning tegishli (fan, ball) guruhida
+    ko'rsatiladigan NOM bilan bog'laydi.
+
+    MUHIM: agar bir xil fan nomi (masalan "Matematika") ikki xil ball
+    bilan alohida guruh sifatida uchrasa -- masalan majburiy fanlar
+    ichida 1.1 ball bilan, va alohida asosiy fan sifatida 3.1 ball
+    bilan -- ular endi natija/statistikada bitta "Matematika"ga
+    birlashib QOLMAYDI. Ikkinchi (va undan keyingi) uchrashuv ballni
+    ham nomga qo'shib ajratiladi: "Matematika (3.1 ball)".
+
+    Bitta marta uchraydigan fanlar (masalan "Fizika") nomi
+    o'zgarishsiz qoladi -- keraksiz "(2.1 ball)" qo'shilmaydi.
+    """
+    blocks = _build_true_subject_breakdown(questions)
+
+    label_counts: dict[str, int] = {}
+    for block in blocks:
+        label_counts[block.subject] = label_counts.get(block.subject, 0) + 1
+
+    mapping: dict[int, str] = {}
+    for block in blocks:
+        label = block.subject
+        if label_counts[block.subject] > 1:
+            label = f"{block.subject} ({block.point:g} ball)"
+        for tartib in range(block.start, block.end + 1):
+            mapping[tartib] = label
+    return mapping
+
+
 def create_exam_job(
     db: Session, teacher: models.User, group_id: str, test_set_id: str,
     paper_variant_count: int = 1, name: str | None = None,  # YANGI
@@ -243,6 +285,16 @@ def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> 
 
             subject_blocks = _build_subject_blocks(questions)
             subject_breakdown = _build_true_subject_breakdown(questions)
+
+            # Bir xil fan nomi turli ball bilan alohida guruh bo'lsa
+            # (masalan majburiy fanlar ichidagi Matematika 1.1 ball vs
+            # asosiy fan sifatidagi Matematika 3.1 ball), natija
+            # statistikasida bittaga birlashib QOLMASLIGI uchun har bir
+            # savolga aniq guruh nomi biriktiriladi.
+            group_labels = _tartib_to_group_label(questions)
+            for q in questions:
+                q["fan_group"] = group_labels[q["tartib"]]
+
             sheet_exam = SheetExam(
                 exam_id=exam.exam_code, exam_name=test_set.name,
                 total_questions=exam.total_questions, subjects=subject_blocks,
@@ -268,6 +320,7 @@ def run_exam_generation(exam_id: str, job_id: str, paper_variant_count: int) -> 
                 exam_id=exam.exam_code, booklet_id=booklet_id,
                 rendered_questions=rendered_questions, output_path=str(booklet_path),
                 variant_label=selected_variant.label,
+                exam_name=test_set.name,  # YANGI -- "Imtihon haqida" kartasida ko'rsatiladi
             )
             generate_answer_sheet(
                 output_path=str(sheet_path), student=sheet_student, exam=sheet_exam, booklet=sheet_booklet,

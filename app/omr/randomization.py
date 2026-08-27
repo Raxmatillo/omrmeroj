@@ -14,6 +14,25 @@ Qoida:
   - Hammasi bitta seed'dan olingan random.Random orqali -- shu bilan
     aralashtirish istalgan payt REPRODUCIBLE (masalan booklet PDF'ni
     qayta generatsiya qilish yoki natijani tekshirish uchun).
+
+YANGILANISH (fan+ball takrorlanish bugini tuzatish):
+  Savollar orasida bir xil FAN NOMI turli BALL bilan alohida guruh
+  sifatida uchrashi mumkin (masalan majburiy fanlar ichidagi
+  "Matematika" 1.1 ball va asosiy fan sifatidagi "Matematika" 3.1
+  ball). Bunday holatda faqat "fan" maydoniga tayanib natija
+  statistikasi yig'ilsa, ikkisi bitta "Matematika"ga birlashib,
+  ikkinchi guruhning borligi yo'qolib ketadi.
+
+  Buning oldini olish uchun app/services/exam_service.py endi har bir
+  savolga generatsiyadan OLDIN aniq "fan_group" maydonini biriktiradi
+  (masalan "Matematika (3.1 ball)"). Bu funksiya endi shu maydonni
+  o'qib, rendered_questions va answer_key ichiga ham qo'shib qo'yadi --
+  shu bilan omr_service.py natija hisoblashda TO'G'RI guruh bo'yicha
+  ajrata oladi.
+
+  Orqaga moslik: agar "fan_group" berilmagan bo'lsa (masalan eski
+  chaqiruvchi kod hali yangilanmagan bo'lsa), oddiy "fan" qiymati
+  ishlatiladi -- xatti-harakat oldingidek qoladi, hech narsa buzilmaydi.
 """
 from __future__ import annotations
 
@@ -46,15 +65,15 @@ def build_shuffled_booklet(questions: list[dict], seed: str) -> tuple[list[dict]
     questions -- bitta Variant'ga tegishli savollar, har biri:
         {id, tartib, fan, ball, savol_html, savol_rasm_url, jadval_html,
          variant_a_html, variant_b_html, variant_c_html, variant_d_html,
-         togri_javob}
+         togri_javob, fan_group (ixtiyoriy -- YANGI)}
     seed -- masalan f"{exam_id}-{booklet_id}".
 
     Qaytaradi:
         rendered_questions -- display_tartib bo'yicha o'sish tartibida,
-            har biri {display_tartib, fan, ball, savol_html,
+            har biri {display_tartib, fan, fan_group, ball, savol_html,
             savol_rasm_url, jadval_html, options:[{"letter","html"}, ...]}
         answer_key -- omr_service.py kutayotgan formatda:
-            {str(display_tartib): {"fan", "ball",
+            {str(display_tartib): {"fan", "fan_group", "ball",
              "correct_letter_shown_to_student",
              "letter_to_original_option", "original_question_id"}}
     """
@@ -83,9 +102,15 @@ def build_shuffled_booklet(questions: list[dict], seed: str) -> tuple[list[dict]
             correct_shown_letter = LETTERS[order.index(togri_idx)]
             letter_to_original_option = {LETTERS[shown_pos]: orig_idx for shown_pos, orig_idx in enumerate(order)}
 
+            # YANGI: agar exam_service.py oldindan "fan_group" biriktirgan
+            # bo'lsa shuni ishlatamiz, aks holda oddiy "fan"ga qaytamiz
+            # (orqaga moslik -- eski chaqiruvchilar buzilmaydi).
+            fan_group = q.get("fan_group") or q["fan"]
+
             rendered.append({
                 "display_tartib": position,
                 "fan": q["fan"],
+                "fan_group": fan_group,  # YANGI
                 "ball": q["ball"],
                 "savol_html": q["savol_html"],
                 "savol_rasm_url": q.get("savol_rasm_url"),
@@ -95,6 +120,11 @@ def build_shuffled_booklet(questions: list[dict], seed: str) -> tuple[list[dict]
 
             answer_key[str(position)] = {
                 "fan": q["fan"],
+                "fan_group": fan_group,  # YANGI -- natija statistikasi
+                # (app/services/omr_service.py) shu maydon bo'yicha
+                # guruhlaydi, shuning uchun bir xil fan nomli, lekin
+                # boshqa ball guruhiga tegishli savollar endi
+                # aralashib ketmaydi.
                 "ball": q["ball"],
                 "correct_letter_shown_to_student": correct_shown_letter,
                 "savol_html": q.get("savol_html", ""),  # QO'SHING

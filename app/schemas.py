@@ -147,6 +147,7 @@ class QuestionIn(BaseModel):
     ball: float
     savol_html: str
     savol_rasm_url: str | None = None
+    savol_rasm_style: str | None = "medium"
     jadval_html: str | None = None
     variant_a_html: str
     variant_b_html: str
@@ -158,6 +159,7 @@ class QuestionIn(BaseModel):
 class QuestionOut(QuestionIn):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    savol_rasm_style: str | None
 
 # app/schemas.py
 

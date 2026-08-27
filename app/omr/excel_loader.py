@@ -6,8 +6,6 @@ generatori orasidagi "ko'prik".
 """
 
 from app.utils.excel_shared import (
-    read_and_validate_rows,
-    ExcelValidationError as TemplateError,  # eski nom bilan moslik uchun
     LETTER_TO_INDEX,
 )
 

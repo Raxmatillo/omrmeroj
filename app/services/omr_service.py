@@ -17,6 +17,17 @@ tayyor CV kodingiz) -- bu servis quyidagilarni bajaradi:
   6. Tekislangan (warped) skan rasmini diskka saqlaydi va shu rasm +
      hisoblangan natija asosida NATIJA PDF generatsiya qiladi
      (TZ 19-bo'lim), so'ng Result.result_pdf_path'ni to'ldiradi.
+
+YANGILANISH (fan+ball takrorlanish bugini tuzatish):
+  per_subject statistikasi endi answer_key'dagi "fan_group" maydoni
+  bo'yicha guruhlanadi ("fan" emas). Bu -- bir xil fan nomi (masalan
+  "Matematika") turli ball guruhida (masalan majburiy fanlar ichida
+  1.1 ball va asosiy fan sifatida 3.1 ball) alohida-alohida qatorlarda
+  ko'rsatilishini ta'minlaydi, aks holda ular bitta "Matematika"ga
+  birlashib, natija noto'g'ri chiqardi.
+
+  Orqaga moslik: agar answer_key eski (fan_group maydoni yo'q) bo'lsa,
+  oddiy "fan" ishlatiladi -- eski imtihonlar ustida ishlash davom etadi.
 """
 from __future__ import annotations
 
@@ -36,6 +47,14 @@ from app.omr.result_pdf_generator import generate_result_pdf
 from app.security import create_file_access_token
 
 logger = logging.getLogger("omrmeroj.omr")
+
+
+def _subject_group_label(meta: dict) -> str:
+    """answer_key ichidagi bitta savol meta'sidan natija statistikasi
+    uchun ishlatiladigan guruh nomini oladi. "fan_group" bo'lsa shuni,
+    bo'lmasa (eski imtihonlar uchun orqaga moslik) oddiy "fan"ni
+    qaytaradi."""
+    return meta.get("fan_group") or meta.get("fan", "Umumiy")
 
 
 class OmrError(Exception):
@@ -160,7 +179,8 @@ def check_answer_sheet(
 
     # generate_question_booklet.build() / randomization.build_shuffled_booklet()
     # answer_key_json'ni shu formatda yozadi:
-    #   {tartib: {"fan": ..., "ball": ..., "correct_letter_shown_to_student": "B", ...}}
+    #   {tartib: {"fan": ..., "fan_group": ..., "ball": ...,
+    #             "correct_letter_shown_to_student": "B", ...}}
     answer_key: dict = exam_student.answer_key_json
 
     raw_answers: dict[str, str | None] = {}
@@ -199,7 +219,7 @@ def check_answer_sheet(
         given = raw_answers.get(tartib_str)
         correct_letter = meta["correct_letter_shown_to_student"]
         ball = float(meta.get("ball", 1))
-        fan = meta.get("fan", "Umumiy")
+        fan = _subject_group_label(meta)  # YANGI: fan_group bo'yicha guruhlash
 
         subj = per_subject.setdefault(fan, {"correct": 0, "total": 0, "score": 0.0})
         subj["total"] += 1
@@ -273,6 +293,12 @@ def check_answer_sheet(
             scanned_image_path=scanned_path,
             download_url=download_url,
             variant_label=variant_label,   # <-- YANGI
+            # YANGI: allaqachon hisoblangan statistikani to'g'ridan-to'g'ri
+            # uzatamiz -- generate_result_pdf ichida qayta hisoblash shart
+            # emas (bir xil ma'lumotni ikki marta sanamaslik uchun).
+            correct_count=correct, incorrect_count=incorrect,
+            blank_count=blank, ambiguous_count=ambiguous,
+            checked_at=result.checked_at,
         )
         result.result_pdf_path = str(pdf_path)
         db.commit()
@@ -313,7 +339,7 @@ def _score_from_raw_answers(
         given = raw_answers.get(tartib_str)
         correct_letter = meta["correct_letter_shown_to_student"]
         ball = float(meta.get("ball", 1))
-        fan = meta.get("fan", "Umumiy")
+        fan = _subject_group_label(meta)  # YANGI: fan_group bo'yicha guruhlash
 
         subj = per_subject.setdefault(fan, {"correct": 0, "total": 0, "score": 0.0})
         subj["total"] += 1
@@ -445,6 +471,10 @@ def save_result(db: Session, exam_student_id: str, scores: dict, warped_image) -
             scanned_image_path=scanned_path,
             download_url=download_url,
             variant_label=variant_label,
+            # YANGI: statistikani qayta hisoblamasdan to'g'ridan-to'g'ri uzatamiz
+            correct_count=scores["correct"], incorrect_count=scores["incorrect"],
+            blank_count=scores["blank"], ambiguous_count=scores["ambiguous"],
+            checked_at=result.checked_at,
         )
         result.result_pdf_path = str(pdf_path)
         db.commit()
@@ -478,7 +508,7 @@ def apply_manual_corrections(db: Session, result: models.Result, corrections: di
         given = raw_answers.get(tartib_str)
         correct_letter = meta["correct_letter_shown_to_student"]
         ball = float(meta.get("ball", 1))
-        fan = meta.get("fan", "Umumiy")
+        fan = _subject_group_label(meta)  # YANGI: fan_group bo'yicha guruhlash
 
         subj = per_subject.setdefault(fan, {"correct": 0, "total": 0, "score": 0.0})
         subj["total"] += 1
@@ -542,6 +572,10 @@ def apply_manual_corrections(db: Session, result: models.Result, corrections: di
             scanned_image_path=scanned_path,
             download_url=download_url,
             variant_label=variant_label,
+            # YANGI: statistikani qayta hisoblamasdan to'g'ridan-to'g'ri uzatamiz
+            correct_count=result.correct_count, incorrect_count=result.incorrect_count,
+            blank_count=result.blank_count, ambiguous_count=result.ambiguous_count,
+            checked_at=result.checked_at,
         )
         result.result_pdf_path = str(pdf_path)
         db.commit()
@@ -550,4 +584,3 @@ def apply_manual_corrections(db: Session, result: models.Result, corrections: di
         logger.exception("Qo'lda tuzatishdan keyin natija PDF qayta generatsiyasida xato")
 
     return result
-

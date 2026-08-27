@@ -26,6 +26,11 @@ Xususiyatlar:
   yonida) -- app/omr/omr_reader.py shu bubble'larni ham o'qiydi va
   ExamStudent.paper_variant_number bilan solishtiradi (nomuvofiqlik
   bo'lsa natija "tekshirish kerak" deb belgilanadi).
+- BO'YASH NAMUNASI (YANGI): "Ko'rsatmalar" bo'limida endi shunchaki
+  matn emas, balki TO'G'RI va NOTO'G'RI bo'yash usullarining vizual
+  namunasi chiziladi (to'liq bo'yalgan, yarim bo'yalgan, kuchsiz/och
+  bo'yalgan, X belgisi, faqat nuqta) -- talaba ko'zi bilan ko'rib,
+  qanday bo'yash kerakligini aniq tushunadi.
 
 Production:
 Bu modul keyinchalik FastAPI backend ichida ishlatilishi mumkin.
@@ -484,6 +489,61 @@ def draw_filled_bubble(
 
 
 # ============================================================
+# BO'YASH NAMUNASI (YANGI)
+# ============================================================
+
+def draw_marking_example(
+    c,
+    center_x_mm: float,
+    center_y_top_mm: float,
+    kind: str,
+    radius_mm: float = 1.6,
+):
+    """
+    "Ko'rsatmalar" bo'limida ko'rsatiladigan kichik vizual namuna --
+    talaba TO'G'RI va NOTO'G'RI bo'yash usullarini KO'ZI bilan ko'rib
+    tushunishi uchun (faqat matn bilan tushuntirish OMR uchun
+    yetarli emas -- talabalar amalda turlicha bo'yaydi: yarim, och,
+    X belgisi, faqat nuqta va h.k. -- bularning barchasi OMR
+    tomonidan noaniq/xato deb o'qilishi mumkin).
+
+    kind:
+      "correct" -- to'liq, tekis qoraytirilgan doira (TO'G'RI namuna)
+      "half"    -- faqat yarmi bo'yalgan
+      "light"   -- juda kuchsiz/och bo'yalgan (deyarli sezilmaydi)
+      "x_mark"  -- bo'yash o'rniga X belgisi qo'yilgan
+      "dot"     -- bo'yash o'rniga faqat markazga nuqta qo'yilgan
+    """
+    cx_pt, cy_pt, r_pt = x(center_x_mm), y(center_y_top_mm), radius_mm * mm
+
+    if kind == "correct":
+        draw_filled_bubble(c, center_x_mm, center_y_top_mm, radius_mm=radius_mm)
+        return
+
+    # Qolgan barcha "noto'g'ri" namunalar uchun -- avval bo'sh aylana
+    draw_bubble(c, center_x_mm, center_y_top_mm, radius_mm=radius_mm)
+
+    if kind == "half":
+        c.setFillColor(BLACK)
+        c.wedge(
+            cx_pt - r_pt, cy_pt - r_pt, cx_pt + r_pt, cy_pt + r_pt,
+            startAng=180, extent=180, stroke=0, fill=1,
+        )
+    elif kind == "light":
+        c.setFillColor(MEDIUM_GRAY)
+        c.circle(cx_pt, cy_pt, r_pt * 0.75, stroke=0, fill=1)
+    elif kind == "x_mark":
+        c.setLineWidth(0.55)
+        c.setStrokeColor(BLACK)
+        d = r_pt * 0.62
+        c.line(cx_pt - d, cy_pt - d, cx_pt + d, cy_pt + d)
+        c.line(cx_pt - d, cy_pt + d, cx_pt + d, cy_pt - d)
+    elif kind == "dot":
+        c.setFillColor(BLACK)
+        c.circle(cx_pt, cy_pt, r_pt * 0.3, stroke=0, fill=1)
+
+
+# ============================================================
 # QR CODE
 # ============================================================
 
@@ -886,6 +946,10 @@ def draw_qr_box(
 # ============================================================
 # INSTRUCTIONS (endi ORQA butun kenglikni EGALLAMAYDI --
 # o'ng tomonda TEST VARIANTI bubble maydoni uchun joy qoldiriladi)
+#
+# YANGILANISH: matn bandlari qisqartirildi va bo'limning pastki
+# qismiga TO'G'RI/NOTO'G'RI bo'yash usullarining vizual namunasi
+# qo'shildi (draw_marking_example orqali).
 # ============================================================
 
 def draw_instructions(
@@ -907,7 +971,7 @@ def draw_instructions(
     draw_text(
         c,
         left + 3,
-        top + 5,
+        top + 4.6,
         "JAVOBLARNI BELGILASH QOIDALARI",
         size=6.3,
         bold=True,
@@ -915,16 +979,43 @@ def draw_instructions(
     )
 
     lines = [
-        "1. Faqat bitta javobni belgilang.",
-        "2. Bubble ichini to'liq va aniq bo'yang.",
-        "3. Ikki yoki undan ortiq belgi - xato hisoblanadi.",
-        "4. Varaqani buklamang, yirtmang, QR/markerlarni yopmang.",
+        "1. Bitta savolga bitta javob; doira ICHINI TO'LIQ bo'yang.",
+        "2. Ruchka/qalam bilan chegaradan chiqmasdan, tekis bo'yang.",
     ]
 
-    ly = top + 9.8
+    ly = top + 8.4
     for line in lines:
-        draw_text(c, left + 3, ly, line, size=5.7)
-        ly += 3.7
+        draw_text(c, left + 3, ly, line, size=5.4)
+        ly += 3.1
+
+    # ---- Vizual namuna: TO'G'RI / NOTO'G'RI bo'yash usullari ----
+    subtitle_y = ly + 1.0
+    draw_text(
+        c, left + 3, subtitle_y, "QANDAY BO'YASH KERAK:",
+        size=5.0, bold=True, gray=True,
+    )
+
+    examples = [
+        ("correct", "TO'G'RI", False),
+        ("half", "Yarim", True),
+        ("light", "Kuchsiz", True),
+        ("x_mark", "X belgi", True),
+        ("dot", "Nuqta", True),
+    ]
+
+    icon_y = subtitle_y + 4.3
+    label_y = icon_y + 2.8
+    usable_width = width - 8
+    step = usable_width / (len(examples) - 1)
+    start_x = left + 4
+
+    for i, (kind, label, is_wrong) in enumerate(examples):
+        cx = start_x + i * step
+        draw_marking_example(c, cx, icon_y, kind, radius_mm=1.6)
+        draw_text(
+            c, cx, label_y, label,
+            size=4.5, bold=not is_wrong, center=True, gray=is_wrong,
+        )
 
 
 # ============================================================

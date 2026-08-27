@@ -38,13 +38,13 @@ router = Router(name="contact")
 def _code_keyboard(code: str, purpose: str, phone: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📋 Kodni nusxalash",
-                    callback_data=f"copy_{code}",
-                    copy_text=CopyTextButton(text=code),
-                )
-            ],
+            # [
+            #     InlineKeyboardButton(
+            #         text="📋 Kodni nusxalash",
+            #         callback_data=f"copy_{code}",
+            #         copy_text=CopyTextButton(text=code),
+            #     )
+            # ],
             [
                 InlineKeyboardButton(
                     text="❌ Bu men emasman",
@@ -137,7 +137,7 @@ async def handle_contact(message: Message):
                 "❌ <b>Ro'yxatdan o'tilmagan</b>\n\n"
                 "Bu telefon raqam bilan tizimda hisob topilmadi.\n\n"
                 "📌 Iltimos, avval <b>saytda ro'yxatdan o'ting</b>:\n"
-                "🔗 <a href='https://your-domain.com/register'>https://your-domain.com/register</a>",
+                "🔗 <a href='omr.meroj.uz'>https://omr.meroj.uz</a>",
                 reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
@@ -157,8 +157,7 @@ async def handle_contact(message: Message):
         if user.is_verified:
             await message.answer(
                 "✅ <b>Hisob allaqachon faollashtirilgan</b>\n\n"
-                "🔑 Saytga kirish uchun telefon raqam va parolingizdan foydalaning.\n\n"
-                "📌 <a href='https://your-domain.com/login'>Kirish sahifasiga o'tish</a>",
+                "🔑 Saytga kirish uchun telefon raqam va parolingizdan foydalaning.\n\n",
                 reply_markup=ReplyKeyboardRemove(),
                 parse_mode="HTML",
                 disable_web_page_preview=True,
@@ -188,9 +187,7 @@ async def handle_contact(message: Message):
             f"📋 Kodni nusxalash uchun tugmani bosing va saytga kiriting.\n\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"⚠️ <b>MUHIM!</b> Agar bu Siz boshlamagan bo'lmasangiz,"
-            f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📌 <a href='https://your-domain.com/verify'>Kodni kiritish sahifasiga o'tish</a>",
+            f"bu xabarni <b>E'TIBORSIZ QOLDIRING</b> va hech kimga kodni bermang.\n",
             reply_markup=_code_keyboard(code, purpose="register", phone=phone),  # <-- BU YERDA purpose
             parse_mode="HTML",
             disable_web_page_preview=True,

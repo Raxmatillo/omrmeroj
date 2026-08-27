@@ -150,6 +150,8 @@ class Question(Base):
 
     savol_html = Column(Text, nullable=False)
     savol_rasm_url = Column(String, nullable=True)
+    savol_rasm_style = Column(String, default="medium")  # small, medium, large, original
+
     jadval_html = Column(Text, nullable=True)
 
     variant_a_html = Column(Text, nullable=False)
@@ -284,3 +286,45 @@ class ProcessingJob(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
+
+
+
+class ServiceRequestStatus(str, enum.Enum):
+    pending = "pending"          # kutilmoqda
+    in_progress = "in_progress"  # jarayonda
+    done = "done"                # tayyor
+    cancelled = "cancelled"      # bekor qilingan
+
+
+class PaymentStatus(str, enum.Enum):
+    unpaid = "unpaid"
+    paid = "paid"
+
+
+class ServiceRequest(Base):
+    """
+    Mijoz botga /buyurtma orqali yozgan so'rovi -- masalan "90 ta savol
+    tayyorlab bering, fanlar: matematika, fizika" kabi erkin matnli
+    tavsif. Bu -- to'liq avtomatlashtirilgan tizim emas, balki SIZ
+    (admin) qo'lda ko'rib chiqib bajaradigan buyurtmalar navbati.
+    """
+    __tablename__ = "service_requests"
+
+    id = Column(String, primary_key=True, default=uid)
+
+    # So'rov yuborgan kishi -- User jadvaliga BOG'LANMAGAN ataylab,
+    # chunki so'rov yuboruvchi hali ro'yxatdan o'tmagan bo'lishi mumkin
+    # (masalan potentsial yangi mijoz, hali teacher akkaunti yo'q).
+    telegram_id = Column(String, nullable=False, index=True)
+    username = Column(String, nullable=True)
+    full_name = Column(String, nullable=True)
+
+    description = Column(Text, nullable=False)
+
+    status = Column(Enum(ServiceRequestStatus), default=ServiceRequestStatus.pending, nullable=False)
+    payment_status = Column(Enum(PaymentStatus), default=PaymentStatus.unpaid, nullable=False)
+
+    admin_note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=True)
