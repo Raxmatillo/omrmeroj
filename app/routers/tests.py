@@ -4,6 +4,7 @@ from io import BytesIO
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 
 
 from app import models, schemas
@@ -197,3 +198,39 @@ def delete_question(question_id: str, user: models.User = Depends(require_teache
     db.delete(q)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/questions/{question_id}/stats")
+def get_question_stats(question_id: str, user: models.User = Depends(require_teacher),
+                        db: Session = Depends(get_db)):
+    """
+    Savolning qiyinchilik statistikasi -- QuestionAttempt jadvalidan
+    hisoblanadi (bo'sh/noaniq javoblar hisobga OLINMAYDI -- faqat
+    aniq to'g'ri/xato javoblar).
+
+    Kelajakda bu yerga to'liq Rasch metodi hisob-kitobi ham
+    qo'shilishi mumkin -- hozircha oddiy foiz (v1 reja bo'yicha).
+    """
+    q = db.get(models.Question, question_id)
+    if not q:
+        raise HTTPException(status_code=404, detail="Savol topilmadi")
+    _get_owned_variant(q.variant_id, user, db)  # egalik tekshiruvi
+
+    total = db.query(func.count(models.QuestionAttempt.id)).filter(
+        models.QuestionAttempt.question_id == question_id,
+        models.QuestionAttempt.is_correct.isnot(None),
+    ).scalar() or 0
+
+    correct = db.query(func.count(models.QuestionAttempt.id)).filter(
+        models.QuestionAttempt.question_id == question_id,
+        models.QuestionAttempt.is_correct.is_(True),
+    ).scalar() or 0
+
+    difficulty_percent = round(correct / total * 100, 1) if total else None
+
+    return {
+        "question_id": question_id,
+        "times_shown": total,
+        "times_correct": correct,
+        "difficulty_percent": difficulty_percent,  # None = hali baholanmagan
+    }

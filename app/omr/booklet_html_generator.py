@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from weasyprint import HTML
-from app.utils.latex_render import render_latex_in_html
+from app.utils.latex_render import render_latex_in_html, render_latex_in_html_multi
 import app.utils as _utils_pkg
 
 # MUHIM: bu fayl (booklet_html_generator.py) "omr/" papkasida, lekin
@@ -62,9 +62,6 @@ def _format_ball_label(qs: list[dict]) -> str:
 
 
 def _question_html(position: int, q: dict) -> str:
-    savol = render_latex_in_html(q.get("savol_html", ""))
-    jadval = render_latex_in_html(q.get("jadval_html", ""))
-
     style = q.get("savol_rasm_style", "medium")
     size_classes = {
         "small": "max-width: 60mm; max-height: 45mm;",
@@ -79,39 +76,52 @@ def _question_html(position: int, q: dict) -> str:
         if q.get("savol_rasm_url") else ""
     )
 
-    options_html = ""
-
-    # 1. USUL: variant_a_html, variant_b_html, ...
+    # Qaysi variant manbasi ishlatilishini AVVALDAN (xom matn asosida)
+    # aniqlaymiz -- bu asl uch-usulli fallback bilan bir xil natija
+    # beradi, chunki KaTeX render qilish hech qachon bo'sh bo'lmagan
+    # matnni bo'sh qilib qo'ymaydi (faqat formulalarni o'rab/almashtiradi
+    # yoki, render muvaffaqiyatsiz bo'lsa, xom matnni <code> ichida
+    # qaytaradi) -- shuning uchun "bo'sh/bo'sh emas" holati xom matndan
+    # aniq bilinadi, va bu tekshiruvni oldindan qilish orqali barcha
+    # parchalarni BITTA batch chaqiruvida render qilish mumkin bo'ladi.
+    letters = ["A", "B", "C", "D"]
     variant_keys = ["variant_a_html", "variant_b_html", "variant_c_html", "variant_d_html"]
     has_variant_keys = any(k in q for k in variant_keys)
-    if has_variant_keys:
-        for letter, key in zip(["A", "B", "C", "D"], variant_keys):
-            opt_html = render_latex_in_html(q.get(key, ""))
-            if opt_html.strip():
-                options_html += (
-                    f'<div class="option"><span class="option-letter">{letter})</span> '
-                    f'<span class="option-text">{opt_html}</span></div>'
-                )
 
-    # 2. USUL: eski `options` kaliti (agar yuqorida bo'sh bo'lsa)
-    if not options_html and "options" in q:
+    raw_options: list[str] = []
+    option_letters: list[str] = []
+
+    if has_variant_keys and any((q.get(k) or "").strip() for k in variant_keys):
+        # 1. USUL: variant_a_html, variant_b_html, ...
+        for letter, key in zip(letters, variant_keys):
+            raw_options.append(q.get(key, "") or "")
+            option_letters.append(letter)
+    elif "options" in q and any((opt.get("html") or "").strip() for opt in q["options"]):
+        # 2. USUL: eski `options` kaliti
         for opt in q["options"]:
-            opt_html = render_latex_in_html(opt.get("html", ""))
-            if opt_html.strip():
-                options_html += (
-                    f'<div class="option"><span class="option-letter">{opt["letter"]})</span> '
-                    f'<span class="option-text">{opt_html}</span></div>'
-                )
+            raw_options.append(opt.get("html", "") or "")
+            option_letters.append(opt["letter"])
+    else:
+        # 3. USUL: to'g'ridan-to'g'ri A, B, C, D kalitlari
+        for letter in letters:
+            raw_options.append(str(q.get(letter) or q.get(f"variant_{letter}", "") or ""))
+            option_letters.append(letter)
 
-    # 3. USUL: to'g'ridan-to'g'ri A, B, C, D kalitlari
-    if not options_html:
-        for letter in ["A", "B", "C", "D"]:
-            opt_html = q.get(letter) or q.get(f"variant_{letter}", "")
-            if opt_html:
-                options_html += (
-                    f'<div class="option"><span class="option-letter">{letter})</span> '
-                    f'<span class="option-text">{render_latex_in_html(str(opt_html))}</span></div>'
-                )
+    # Savol matni + jadval + barcha variantlar -- BITTASI o'rniga
+    # BITTA batch chaqiruvida render qilinadi (tezlik uchun; natija
+    # oldingi bitta-bitta chaqiruvlar bilan bir xil).
+    rendered = render_latex_in_html_multi(
+        [q.get("savol_html", ""), q.get("jadval_html", ""), *raw_options]
+    )
+    savol, jadval, *rendered_options = rendered
+
+    options_html = ""
+    for letter, opt_html in zip(option_letters, rendered_options):
+        if opt_html.strip():
+            options_html += (
+                f'<div class="option"><span class="option-letter">{letter})</span> '
+                f'<span class="option-text">{opt_html}</span></div>'
+            )
 
     return f"""
     <div class="question">
@@ -273,7 +283,7 @@ th {
 
 def build_booklet_html(
     student: dict, exam_id: str, booklet_id: str,
-    rendered_questions: list[dict], brand_name: str = "BRAND NAME",
+    rendered_questions: list[dict], brand_name: str = "ME'ROJ",
     variant_label: str | None = None, exam_name: str | None = None
 ) -> str:
     fanlar_str = ", ".join(sorted({q["fan"] for q in rendered_questions}))
@@ -347,7 +357,7 @@ def build_booklet_html(
 
 def render_booklet_pdf(
     student: dict, exam_id: str, booklet_id: str,
-    rendered_questions: list[dict], output_path: str, brand_name: str = "BRAND NAME",
+    rendered_questions: list[dict], output_path: str, brand_name: str = "ME'ROJ",
     variant_label: str | None = None, exam_name: str | None = None
 ) -> str:
     html = build_booklet_html(

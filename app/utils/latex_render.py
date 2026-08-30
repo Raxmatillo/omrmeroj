@@ -211,10 +211,119 @@ def _fallback_html(expr: str) -> str:
     return f'<code>${safe}$</code>'
 
 
+# ---------------------------------------------------------------------
+# YANGI (tezlik): render natijalari keshi + batch render funksiyasi.
+#
+# Nega kerak: bir xil formula (masalan bitta savoldagi kasr) HAR BIR
+# talabaning kitobchasi uchun alohida-alohida qayta render qilinardi,
+# garchi savollar to'plami barcha talabalar uchun bir xil bo'lsa ham
+# (faqat tartibi aralashtiriladi). Bu esa har safar yangi Node.js
+# subprocess ochilishiga olib kelardi -- imtihon generatsiyasi paytida
+# CPU'ni keskin band qiladigan asosiy sabab shu edi.
+#
+# Bu kesh: bir xil (normallashtirilgan) LaTeX ifodasi endi FAQAT BIR
+# MARTA Node'ga yuboriladi, keyingi barcha chaqiruvlar xotiradan
+# olinadi. Natija/format oldingisi bilan AYNAN bir xil -- faqat qayerdan
+# kelishi (Node vs xotira) o'zgaradi.
+# ---------------------------------------------------------------------
+_RENDER_CACHE: dict[str, dict] = {}
+_RENDER_CACHE_MAX = 20000  # xotira portlab ketmasligi uchun oddiy chegara
+
+
+def _cache_get(key: str) -> dict | None:
+    return _RENDER_CACHE.get(key)
+
+
+def _cache_put_many(items: dict[str, dict]) -> None:
+    if len(_RENDER_CACHE) + len(items) > _RENDER_CACHE_MAX:
+        # Juda uzoq ishlagan process uchun oddiy himoya -- kesh
+        # tozalanadi va qaytadan to'ldirila boshlaydi. Odatiy holatda
+        # (bitta imtihon generatsiyasi) bu chegaraga yetilmaydi.
+        _RENDER_CACHE.clear()
+    _RENDER_CACHE.update(items)
+
+
+def render_latex_in_html_multi(
+    html_list: list[str | None], fontsize: float = 11, dpi: int = 150
+) -> list[str]:
+    """
+    Bir nechta HTML parchasini (masalan bitta savolning matni + jadvali
+    + 4 ta variant) BITTA chaqiruvda render qiladi.
+
+    Har bir alohida parcha uchun render_latex_in_html(parcha) chaqirilsa
+    ANIQ SHU NATIJA chiqadi -- farqi faqat ISHLASH TEZLIGIDA: (1) barcha
+    parchalardagi formulalar birlashtirilib, bitta Node.js chaqiruvida
+    yuboriladi (oldin har bir parcha uchun alohida subprocess ochilardi),
+    (2) avval boshqa joyda (masalan boshqa talabaning kitobchasida)
+    render qilingan bir xil formula xotiradagi keshdan olinadi va
+    Node'ga umuman yuborilmaydi.
+
+    Kirish tartibi saqlanadi: natija ro'yxati html_list bilan bir xil
+    uzunlik va tartibda qaytadi.
+    """
+    htmls = [h or "" for h in html_list]
+    per_html_items: list[list[dict]] = [_extract_expressions(h) for h in htmls]
+
+    # Barcha parchalardagi noyob (keshda yo'q) ifodalarni yig'amiz.
+    to_render: dict[str, str] = {}
+    for items in per_html_items:
+        for it in items:
+            fixed = _fix_latex(it["raw_expr"])
+            it["fixed"] = fixed
+            if not fixed:
+                it["skip"] = True
+                continue
+            it["skip"] = False
+            it["cache_key"] = fixed
+            if _cache_get(fixed) is None and fixed not in to_render:
+                to_render[fixed] = r"\displaystyle " + fixed
+
+    if to_render:
+        keys = list(to_render.keys())
+        payload = [{"id": i, "expr": to_render[k], "display": False} for i, k in enumerate(keys)]
+        results = _call_katex_node(payload)
+        new_entries = {keys[r["id"]]: r for r in results if "id" in r and r["id"] < len(keys)}
+        _cache_put_many(new_entries)
+
+    # Nisbiy shrift o'lchami: hujjatning asosiy shrifti (12pt) ga
+    # nisbatan fontsize/12 nisbatida em beriladi.
+    rel_size = round(fontsize / 12.0, 3)
+
+    out_list: list[str] = []
+    for h, items in zip(htmls, per_html_items):
+        if not items:
+            out_list.append(h)
+            continue
+
+        out = h
+        # Oxiridan boshiga qarab almashtiramiz, shunda oldingi
+        # almashtirishlar keyingi match.span() indekslarini buzmaydi.
+        for idx in range(len(items) - 1, -1, -1):
+            it = items[idx]
+            m = it["match"]
+            if it.get("skip"):
+                replacement = ""
+            else:
+                r = _cache_get(it["cache_key"])
+                if r is None or "error" in r or not r.get("html"):
+                    if r and "error" in r:
+                        logger.warning(f"KaTeX render xatolik: {it['raw_expr']} -> {r['error']}")
+                    replacement = _fallback_html(it["raw_expr"])
+                else:
+                    replacement = (
+                        f'<span class="katex-wrap" style="font-size:{rel_size}em;">'
+                        f'{r["html"]}</span>'
+                    )
+            out = out[: m.start()] + replacement + out[m.end():]
+        out_list.append(out)
+
+    return out_list
+
+
 def render_latex_in_html(html: str | None, fontsize: float = 11, dpi: int = 150) -> str:
     """
     HTML ichidagi barcha matematik ifodalarni KaTeX orqali (Node.js,
-    server-side, bitta BATCH chaqiruvda) HTML+CSS'ga aylantiradi.
+    server-side) HTML+CSS'ga aylantiradi.
 
     `dpi` parametri endi ishlatilmaydi (rasm emas, vektor/shrift asosli
     render) -- faqat eski chaqiruv joylari (booklet_html_generator.py)
@@ -225,67 +334,12 @@ def render_latex_in_html(html: str | None, fontsize: float = 11, dpi: int = 150)
     ~12pt bo'lgani uchun fontsize=11 taxminan 0.9em'ga to'g'ri keladi,
     formula matndan sal kichikroq/tengroq chiqishi uchun quyida
     nisbatlangan).
+
+    ESLATMA (tezlik): bir nechta parchani BIRGALIKDA render qilish
+    kerak bo'lsa (masalan bitta savol + variantlari), buning o'rniga
+    render_latex_in_html_multi() dan foydalaning -- u xuddi shu
+    natijani beradi, lekin ancha tezroq (kesh + bitta batch chaqiruv).
     """
     if not html:
         return ""
-
-    items = _extract_expressions(html)
-    if not items:
-        return html
-
-    # Har bir ifodani normalizatsiya qilib, KaTeX'ga yuboriladigan
-    # payload'ni tayyorlaymiz. is_block=True bo'lsa \displaystyle
-    # prefiksi qo'shiladi -- shunda kasr/summa to'liq o'lchamda
-    # chiqadi, lekin displayMode HAMON false (katex_render.js'da),
-    # shuning uchun formula baribir matn bilan bir qatorda qoladi,
-    # markazlanmaydi.
-    payload = []
-    for idx, it in enumerate(items):
-        fixed = _fix_latex(it["raw_expr"])
-        if not fixed:
-            it["skip"] = True
-            continue
-        it["skip"] = False
-        it["id"] = idx
-        expr_for_katex = r"\displaystyle " + fixed
-        payload.append({"id": idx, "expr": expr_for_katex, "display": False})
-
-    results_by_id = {}
-    if payload:
-        results = _call_katex_node(payload)
-        for r in results:
-            results_by_id[r["id"]] = r
-
-    # Nisbiy shrift o'lchami: hujjatning asosiy shrifti (12pt) ga
-    # nisbatan fontsize/12 nisbatida em beriladi.
-    rel_size = round(fontsize / 12.0, 3)
-
-    # Endi natijalarni asl matndagi joylariga QAYTARIB qo'yamiz --
-    # oxiridan boshiga qarab almashtiramiz, shunda oldingi
-    # almashtirishlar keyingi match.span() indekslarini buzmaydi.
-    out = html
-    
-    for idx in range(len(items) - 1, -1, -1):
-        it = items[idx]
-        m = it["match"]
-        if it.get("skip"):
-            replacement = ""
-        else:
-            r = results_by_id.get(it["id"])
-            if r is None or "error" in r or not r.get("html"):
-                if r and "error" in r:
-                    logger.warning(f"KaTeX render xatolik: {it['raw_expr']} -> {r['error']}")
-                replacement = _fallback_html(it["raw_expr"])
-            else:
-                # style="font-size:...em" -- span ichida, KaTeX
-                # o'zining ichki nisbatlarini shu asosiy o'lchamdan
-                # hisoblab oladi (KaTeX shu tarzda ishlashga
-                # mo'ljallangan -- font-size'ni tashqi konteksdan
-                # meros oladi).
-                replacement = (
-                    f'<span class="katex-wrap" style="font-size:{rel_size}em;">'
-                    f'{r["html"]}</span>'
-                )
-        out = out[: m.start()] + replacement + out[m.end():]
-
-    return out
+    return render_latex_in_html_multi([html], fontsize=fontsize, dpi=dpi)[0]

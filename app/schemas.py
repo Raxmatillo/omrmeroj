@@ -5,7 +5,6 @@ from pydantic import BaseModel, ConfigDict, field_validator, Field
 from app.utils.phone import validate_uzbek_phone
 
 
-
 # ---------- AUTH ----------
 
 class RegisterRequestIn(BaseModel):
@@ -13,7 +12,7 @@ class RegisterRequestIn(BaseModel):
     phone: str
     password: str = Field(..., min_length=6)
     full_name: str = Field(..., min_length=3, max_length=50)
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str) -> str:
@@ -23,7 +22,7 @@ class RegisterRequestIn(BaseModel):
 class RegisterVerifyIn(BaseModel):
     phone: str
     code: str = Field(..., min_length=4, max_length=6)
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str) -> str:
@@ -33,7 +32,7 @@ class RegisterVerifyIn(BaseModel):
 class LoginIn(BaseModel):
     phone: str
     password: str
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str) -> str:
@@ -42,7 +41,7 @@ class LoginIn(BaseModel):
 
 class ForgotPasswordIn(BaseModel):
     phone: str
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str) -> str:
@@ -53,7 +52,7 @@ class ResetPasswordIn(BaseModel):
     phone: str
     code: str = Field(..., min_length=4, max_length=6)
     new_password: str = Field(..., min_length=6)
-    
+
     @field_validator("phone")
     @classmethod
     def validate_phone(cls, v: str) -> str:
@@ -63,6 +62,7 @@ class ResetPasswordIn(BaseModel):
 class RequestCodeOut(BaseModel):
     sent: bool
     detail: str
+
 
 class ChangePhoneRequestIn(BaseModel):
     new_phone: str
@@ -82,6 +82,7 @@ class ChangePhoneVerifyIn(BaseModel):
     def validate_phone(cls, v: str) -> str:
         return validate_uzbek_phone(v)
 
+
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -94,6 +95,7 @@ class UserOut(BaseModel):
     full_name: str | None
     role: str
     is_verified: bool
+
 
 # ---------- GURUHLAR ----------
 
@@ -120,6 +122,7 @@ class GroupOut(GroupIn):
     created_at: datetime
     students: list[StudentOut] = []
 
+
 class GroupUpdateIn(BaseModel):
     name: str | None = None
     description: str | None = None
@@ -141,6 +144,7 @@ class StudentBulkIn(BaseModel):
 class TestSetUpdateIn(BaseModel):
     name: str | None = None
 
+
 class QuestionIn(BaseModel):
     tartib: int
     fan: str
@@ -161,6 +165,7 @@ class QuestionOut(QuestionIn):
     id: str
     savol_rasm_style: str | None
 
+
 # app/schemas.py
 
 class QuestionAnswerDetail(BaseModel):
@@ -175,6 +180,7 @@ class QuestionAnswerDetail(BaseModel):
     variant_b_html: str | None = None  # qo'shildi
     variant_c_html: str | None = None  # qo'shildi
     variant_d_html: str | None = None  # qo'shildi
+
 
 class VariantIn(BaseModel):
     label: str
@@ -218,7 +224,8 @@ class ExamOut(BaseModel):
     name: str | None  # YANGI
     exam_code: str
     group_id: str
-    test_set_id: str
+    test_set_id: str | None  # YANGI: Toplam-asosidagi imtihonda None
+    toplam_id: str | None = None  # YANGI (Savollar banki)
     total_questions: int
     status: str
     created_at: datetime
@@ -260,9 +267,130 @@ class ChangePasswordIn(BaseModel):
     old_password: str
     new_password: str = Field(..., min_length=6)
 
+
 class CancelCodeIn(BaseModel):
     phone: str
     purpose: str  # "register", "reset_password", "change_phone", "delete_account"
 
+
 class DeleteAccountConfirmIn(BaseModel):
     code: str = Field(..., min_length=4, max_length=6, description="Tasdiqlash kodi")
+
+
+# =============================================================
+# YANGI (Savollar banki, 3-qism)
+# =============================================================
+
+class BankItemIn(BaseModel):
+    fan: str
+    kitob_nomi: str | None = None
+    bolim_nomi: str | None = None
+    savol_html: str
+    savol_rasm_url: str | None = None
+    savol_rasm_style: str = "medium"
+    jadval_html: str | None = None
+    variant_a_html: str
+    variant_b_html: str
+    variant_c_html: str
+    variant_d_html: str
+    togri_javob: str
+    ball: float = 1.1
+
+
+class BankItemUpdateIn(BaseModel):
+    fan: str | None = None
+    kitob_nomi: str | None = None
+    bolim_nomi: str | None = None
+    savol_html: str | None = None
+    savol_rasm_url: str | None = None
+    savol_rasm_style: str | None = None
+    jadval_html: str | None = None
+    variant_a_html: str | None = None
+    variant_b_html: str | None = None
+    variant_c_html: str | None = None
+    variant_d_html: str | None = None
+    togri_javob: str | None = None
+    ball: float | None = None
+
+
+class BankItemOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    fan: str
+    kitob_nomi: str | None
+    bolim_nomi: str | None
+    savol_html: str
+    savol_rasm_url: str | None
+    savol_rasm_style: str
+    jadval_html: str | None
+    variant_a_html: str
+    variant_b_html: str
+    variant_c_html: str
+    variant_d_html: str
+    togri_javob: str
+    ball: float
+    times_shown: int
+    times_correct: int
+    difficulty_percent: float | None
+    created_at: datetime
+
+
+class BankSearchOut(BaseModel):
+    items: list[BankItemOut]
+    total: int
+
+
+class ToplamIn(BaseModel):
+    name: str
+    savollar_soni: int
+
+
+class ToplamOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    savollar_soni: int
+    qiyinchilik_maqsadi_json: dict | None
+    created_at: datetime
+
+
+class ToplamQuestionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    bank_item_id: str
+    tartib: int
+    ball: float
+    bank_item: BankItemOut
+
+
+class ToplamDetailOut(ToplamOut):
+    questions: list[ToplamQuestionOut] = []
+
+
+class AddQuestionToToplamIn(BaseModel):
+    bank_item_id: str
+    tartib: int
+    ball: float | None = None
+
+
+class ReorderToplamIn(BaseModel):
+    tartib_map: dict[str, int]  # {bank_item_id: yangi_tartib}
+
+
+class UpdateToplamBallIn(BaseModel):
+    ball: float
+
+
+class AutoFillIn(BaseModel):
+    fan: str
+    qiyinchilik_maqsadi: dict[str, float]  # {"oson": 30, "ortacha": 50, "qiyin": 20}
+
+
+class AutoFillOut(BaseModel):
+    added_count: int
+    shortfall: dict[str, int]
+    used_unrated_fallback: int
+
+
+class CreateToplamExamIn(BaseModel):
+    group_id: str
+    name: str | None = None

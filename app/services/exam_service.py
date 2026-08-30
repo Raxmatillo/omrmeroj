@@ -388,3 +388,187 @@ def delete_exam(db: Session, exam: models.Exam) -> None:
 
     db.delete(exam)
     db.commit()
+
+
+# =============================================================
+# YANGI (Savollar banki, 3-qism): Toplam-asosidagi imtihon yaratish
+#
+# create_exam_job()/run_exam_generation()ning parallel varianti --
+# ular O'ZGARTIRILMAGAN, qoladi. Bu funksiyalar Variant/TestSet
+# o'rniga Toplam ishlatadi, lekin xuddi shu pipeline bosqichlaridan
+# (randomizatsiya, PDF generatsiya, ZIP) foydalanadi.
+#
+# MUHIM CHEKLOV: Toplam'da hozircha bir nechta "qog'oz varianti"
+# (paper variant, ya'ni bir nechta mustaqil Variant orasida talabalarni
+# taqsimlash) tushunchasi YO'Q -- har bir talaba bir xil savollar
+# to'plamidan (faqat A/B/C/D va pozitsiya aralashtirilgan holda)
+# booklet oladi. Ko'p-variantli Toplam-asosidagi imtihon kerak bo'lsa,
+# bu -- kelajakdagi alohida ish.
+# =============================================================
+
+def create_toplam_exam_job(
+    db: Session, teacher: models.User, group_id: str, toplam_id: str,
+    name: str | None = None,
+) -> tuple[models.Exam, models.ProcessingJob]:
+    from app.services.bank_service import get_toplam, BankServiceError
+
+    group = db.get(models.Group, group_id)
+    if not group or group.teacher_id != teacher.id:
+        raise ExamServiceError("Guruh topilmadi")
+
+    try:
+        toplam = get_toplam(db, toplam_id, teacher_id=teacher.id)
+    except BankServiceError as e:
+        raise ExamServiceError(str(e))
+
+    question_count = (
+        db.query(models.ToplamQuestion)
+        .filter(models.ToplamQuestion.toplam_id == toplam.id)
+        .count()
+    )
+    if question_count == 0:
+        raise ExamServiceError("To'plamda hech qanday savol yo'q")
+
+    students = [s for s in group.students if s.is_active]
+    if not students:
+        raise ExamServiceError("Guruhda faol o'quvchi yo'q")
+
+    exam = models.Exam(
+        name=name or toplam.name,
+        teacher_id=teacher.id, group_id=group.id, toplam_id=toplam.id,
+        exam_code=_generate_exam_code(), total_questions=question_count,
+        status=models.ExamStatus.generating,
+    )
+    db.add(exam)
+    db.flush()
+
+    job = models.ProcessingJob(kind="booklet_generation", exam_id=exam.id, status=models.JobStatus.queued)
+    db.add(job)
+    db.commit()
+    db.refresh(exam)
+    db.refresh(job)
+    return exam, job
+
+
+def run_toplam_exam_generation(exam_id: str, job_id: str) -> None:
+    from app.database import SessionLocal
+    from app.services.bank_service import toplam_to_question_dicts
+
+    db = SessionLocal()
+    try:
+        exam = db.get(models.Exam, exam_id)
+        job = db.get(models.ProcessingJob, job_id)
+        if not exam or not job:
+            logger.error("Exam yoki job topilmadi")
+            return
+
+        job.status = models.JobStatus.processing
+        db.commit()
+
+        group = db.get(models.Group, exam.group_id)
+        if not group:
+            raise ExamServiceError("Guruh topilmadi")
+        toplam = db.get(models.Toplam, exam.toplam_id)
+        if not toplam:
+            raise ExamServiceError("To'plam topilmadi")
+
+        students = [s for s in group.students if s.is_active]
+        if not students:
+            raise ExamServiceError("Guruhda faol o'quvchilar mavjud emas")
+
+        # Bir marta bazadan olamiz -- pastda har bir talaba uchun
+        # mustaqil (shallow copy) nusxa yasaymiz, chunki har safar
+        # fan_group maydoni yozib qo'yiladi (eski koddagi
+        # _question_to_dict() har safar YANGI dict qaytargani bilan
+        # bir xil xavfsizlikni saqlash uchun -- umumiy ro'yxatni
+        # to'g'ridan-to'g'ri mutatsiya qilib, talabalar orasida
+        # tasodifiy "sizib chiqish"ning oldini olamiz).
+        questions_base = toplam_to_question_dicts(db, toplam.id, teacher_id=exam.teacher_id)
+
+        output_root = Path(settings.OUTPUT_DIR) / exam.id
+        savollar_dir = output_root / "Savollar"
+        javoblar_dir = output_root / "Javoblar_varaqasi"
+        savollar_dir.mkdir(parents=True, exist_ok=True)
+        javoblar_dir.mkdir(parents=True, exist_ok=True)
+
+        total = len(students)
+        for idx, student in enumerate(students, start=1):
+            rng = random.Random(f"{exam.id}-{student.id}")
+            booklet_id = _generate_booklet_id(db, rng)
+
+            questions = [dict(q) for q in questions_base]
+
+            subject_blocks = _build_subject_blocks(questions)
+            subject_breakdown = _build_true_subject_breakdown(questions)
+            group_labels = _tartib_to_group_label(questions)
+            for q in questions:
+                q["fan_group"] = group_labels[q["tartib"]]
+
+            sheet_exam = SheetExam(
+                exam_id=exam.exam_code, exam_name=toplam.name,
+                total_questions=exam.total_questions, subjects=subject_blocks,
+                subject_breakdown=subject_breakdown,
+            )
+            rendered_questions, answer_key = build_shuffled_booklet(questions, seed=f"{exam.id}-{booklet_id}")
+
+            sheet_student = SheetStudent(
+                id=student.id, first_name=student.first_name, last_name=student.last_name,
+                father_name=student.middle_name or "", group_name=group.name,
+            )
+            sheet_booklet = SheetBooklet(
+                booklet_id=booklet_id, exam_id=exam.exam_code, student_id=student.id,
+                variant_number=None,
+            )
+
+            safe_name = f"{student.last_name}_{student.first_name}".replace(" ", "_")
+            booklet_path = savollar_dir / f"{safe_name}_{booklet_id}_Savol.pdf"
+            sheet_path = javoblar_dir / f"{safe_name}_{booklet_id}_Javoblar.pdf"
+
+            render_booklet_pdf(
+                student={"full_name": sheet_student.full_name, "group_name": group.name},
+                exam_id=exam.exam_code, booklet_id=booklet_id,
+                rendered_questions=rendered_questions, output_path=str(booklet_path),
+                variant_label=None,
+                exam_name=toplam.name,
+            )
+            generate_answer_sheet(
+                output_path=str(sheet_path), student=sheet_student, exam=sheet_exam, booklet=sheet_booklet,
+            )
+
+            db.add(models.ExamStudent(
+                exam_id=exam.id, student_id=student.id, variant_id=None,
+                booklet_id=booklet_id, answer_key_json=answer_key,
+                booklet_pdf_path=str(booklet_path), answer_sheet_pdf_path=str(sheet_path),
+                paper_variant_number=None,
+            ))
+
+            job.progress = int(idx / total * 100)
+            db.commit()
+
+        zip_name = f"{group.name}_{toplam.name}.zip".replace(" ", "_")
+        zip_path = output_root / zip_name
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for f in savollar_dir.glob("*.pdf"):
+                zf.write(f, arcname=f"Savollar/{f.name}")
+            for f in javoblar_dir.glob("*.pdf"):
+                zf.write(f, arcname=f"Javoblar_varaqasi/{f.name}")
+
+        exam.status = models.ExamStatus.ready
+        exam.zip_path = str(zip_path)
+        job.status = models.JobStatus.completed
+        job.progress = 100
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        exam = db.get(models.Exam, exam_id)
+        job = db.get(models.ProcessingJob, job_id)
+        if exam:
+            exam.status = models.ExamStatus.failed
+        if job:
+            job.status = models.JobStatus.failed
+            job.error_message = str(e)
+        db.commit()
+        logger.exception("Toplam-exam generatsiyasida xato: exam_id=%s", exam_id)
+    finally:
+        db.close()

@@ -73,7 +73,14 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, target_metadata=target_metadata,
+            # YANGI: SQLite ALTER COLUMN'ni to'g'ridan-to'g'ri qo'llab-
+            # quvvatlamaydi -- shu sozlama bo'lmasa, ustun turi/NULL
+            # holatini o'zgartiradigan har bir avtogenerate migratsiyani
+            # qo'lda batch_alter_table'ga o'girish kerak bo'lardi.
+            # PostgreSQL'da ham xavfsiz ishlaydi (batch mode kerak
+            # bo'lmasa oddiy ALTER'ga tushadi).
+            render_as_batch=True,
         )
 
         with context.begin_transaction():

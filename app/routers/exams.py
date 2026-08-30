@@ -3,8 +3,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
-from fastapi import BackgroundTasks
-from app.services.exam_service import create_exam_job, run_exam_generation, ExamServiceError, delete_exam
+from app.services.exam_service import create_exam_job, ExamServiceError, delete_exam
 
 from app import models, schemas
 from app.database import get_db
@@ -22,18 +21,24 @@ def _get_owned_exam(exam_id: str, user: models.User, db: Session) -> models.Exam
 
 @router.post("", response_model=schemas.ExamOut)
 def create_exam_endpoint(
-    payload: schemas.ExamCreateIn, background_tasks: BackgroundTasks,
+    payload: schemas.ExamCreateIn,
     user: models.User = Depends(require_teacher), db: Session = Depends(get_db),
 ):
     try:
         exam, job = create_exam_job(
             db, teacher=user, group_id=payload.group_id, test_set_id=payload.test_set_id,
-            paper_variant_count=payload.paper_variant_count, name=payload.name,  # YANGI
+            paper_variant_count=payload.paper_variant_count, name=payload.name,
         )
     except ExamServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    background_tasks.add_task(run_exam_generation, exam.id, job.id, payload.paper_variant_count)
+    # YANGI: background_tasks.add_task(run_exam_generation, ...) OLIB
+    # TASHLANDI. Ish endi DURABLE job_worker.py tsikli tomonidan
+    # avtomatik topib olinadi -- create_exam_job() allaqachon
+    # status=queued ProcessingJob yaratadi (payload_json bilan birga).
+    # Bu shuni anglatadi: agar server aynan shu so'rov ustida ishlab
+    # turgan payt qulab tushsa ham, ish YO'QOLMAYDI -- keyingi safar
+    # server ishga tushganda job_worker.py buni topib, davom ettiradi.
     return exam
 
 @router.get("/{exam_id}/status")

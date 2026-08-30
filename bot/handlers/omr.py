@@ -74,7 +74,7 @@ def _format_preview(scores: dict, student_name: str, is_owner: bool) -> str:
         f"👤 <b>Oʻquvchi:</b> {student_name}\n"
         f"✅ <b>Toʻgʻri:</b> {scores['correct']}  |  ❌ <b>Notoʻgʻri:</b> {scores['incorrect']}\n"
         f"⬜ <b>Boʻsh:</b> {scores['blank']}  |  ❓ <b>Noaniq:</b> {scores['ambiguous']}\n"
-        f"🏆 <b>Jami ball:</b> {scores['total_score']}\n\n"
+        f"🏆 <b>Jami ball:</b> {float(scores['total_score']):.1f}\n\n"
         f"📚 <b>Fanlar boʻyicha:</b>\n{subjects_text}"
     )
     if scores.get("variant_mismatch"):
