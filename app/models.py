@@ -4,7 +4,8 @@ import uuid
 from datetime import datetime, timedelta
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum, JSON
+    Column, String, Integer, Float, Boolean, DateTime, ForeignKey, Text, Enum, JSON,
+    UniqueConstraint, CheckConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -342,6 +343,29 @@ class ServiceRequest(Base):
 # 1. SAVOLLAR BANKI
 # ============================================================
 
+# ============================================================
+# 0. FAN (Subject) -- oldindan ro'yxatdan o'tkaziladigan fanlar ro'yxati
+#
+# MUHIM: bu ESKI tizimdagi Question.fan (erkin matn) bilan
+# ALOQADOR EMAS -- faqat YANGI (bank) tizimi uchun. O'qituvchi
+# savol qo'shishdan OLDIN fanni bir marta ro'yxatdan o'tkazadi
+# (masalan "Matematika"), keyin har bir savolda shu fanni TANLAYDI
+# (erkin matn kiritmaydi) -- shu orqali "Matematika"/"matematika"/
+# "MATEMATIKA" kabi yozuv xilma-xilligi (va shundan kelib chiqadigan
+# statistika bo'linib ketishi) oldini olinadi.
+# ============================================================
+class Fan(Base):
+    __tablename__ = "fans"
+    __table_args__ = (
+        UniqueConstraint("teacher_id", "name", name="uq_fan_teacher_name"),
+    )
+
+    id = Column(String, primary_key=True, default=uid)
+    teacher_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class QuestionBankItem(Base):
     """
     Mustaqil savol -- hech qanday Variant/TestSet'ga BOG'LANMAGAN.
@@ -353,7 +377,11 @@ class QuestionBankItem(Base):
     id = Column(String, primary_key=True, default=uid)
     teacher_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
 
-    fan = Column(String, nullable=False, index=True)
+    # YANGI: erkin matn ("fan = Column(String)") o'rniga Fan jadvaliga
+    # HAVOLA -- o'qituvchi fanni oldindan ro'yxatdan o'tkazadi, savol
+    # qo'shishda shundan TANLAYDI.
+    fan_id = Column(String, ForeignKey("fans.id"), nullable=False, index=True)
+    fan = relationship("Fan")
 
     # YANGI (pptx'dagi g'oya): manba ma'lumotlari -- qaysi kitobdan,
     # qaysi bo'limdan ko'chirilgani. Ixtiyoriy, lekin qidiruv/filter
@@ -403,6 +431,17 @@ class Toplam(Base):
     bitta savol ko'p to'plamda qayta ishlatilishi mumkin.
     """
     __tablename__ = "toplamlar"
+    __table_args__ = (
+        # YANGI: to'plam ko'pi bilan 90 ta savoldan iborat bo'lishi
+        # kerak (DTM-uslubidagi eng katta imtihon hajmi). Bu -- ikkinchi
+        # himoya qatlami (birinchisi schemas.ToplamIn'dagi Field(le=90)
+        # va bank_service.create_toplam'dagi tekshiruv) -- baza
+        # darajasida ham noto'g'ri qiymat yozilishini butunlay
+        # istisno qiladi (masalan kelajakda boshqa yo'l bilan --
+        # migratsiya skripti, to'g'ridan-to'g'ri SQL orqali -- yozilsa
+        # ham).
+        CheckConstraint("savollar_soni > 0 AND savollar_soni <= 90", name="ck_toplam_savollar_soni_max90"),
+    )
 
     id = Column(String, primary_key=True, default=uid)
     teacher_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)

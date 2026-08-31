@@ -278,11 +278,26 @@ class DeleteAccountConfirmIn(BaseModel):
 
 
 # =============================================================
-# YANGI (Savollar banki, 3-qism)
+# YANGI (Savollar banki, 3-qism + fikr-mulohaza asosida yangilangan)
 # =============================================================
 
+class FanIn(BaseModel):
+    name: str
+
+
+class FanUpdateIn(BaseModel):
+    name: str
+
+
+class FanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    created_at: datetime
+
+
 class BankItemIn(BaseModel):
-    fan: str
+    fan_id: str
     kitob_nomi: str | None = None
     bolim_nomi: str | None = None
     savol_html: str
@@ -297,8 +312,12 @@ class BankItemIn(BaseModel):
     ball: float = 1.1
 
 
+class BankItemBulkIn(BaseModel):
+    items: list[BankItemIn] = Field(..., min_length=1, max_length=200)
+
+
 class BankItemUpdateIn(BaseModel):
-    fan: str | None = None
+    fan_id: str | None = None
     kitob_nomi: str | None = None
     bolim_nomi: str | None = None
     savol_html: str | None = None
@@ -316,7 +335,8 @@ class BankItemUpdateIn(BaseModel):
 class BankItemOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
-    fan: str
+    fan_id: str
+    fan: FanOut
     kitob_nomi: str | None
     bolim_nomi: str | None
     savol_html: str
@@ -340,9 +360,18 @@ class BankSearchOut(BaseModel):
     total: int
 
 
+class BankSourcesOut(BaseModel):
+    fanlar: list[FanOut]
+    kitoblar: list[str]
+    bolimlar: list[str]
+
+
 class ToplamIn(BaseModel):
     name: str
-    savollar_soni: int
+    # MUHIM: to'plam ko'pi bilan 90 ta savoldan iborat bo'lishi kerak
+    # (baza darajasida ham CheckConstraint bilan qo'shimcha himoyalangan --
+    # app/models.py'dagi Toplam'ga qarang).
+    savollar_soni: int = Field(..., ge=1, le=90)
 
 
 class ToplamOut(BaseModel):
@@ -381,7 +410,7 @@ class UpdateToplamBallIn(BaseModel):
 
 
 class AutoFillIn(BaseModel):
-    fan: str
+    fan_id: str
     qiyinchilik_maqsadi: dict[str, float]  # {"oson": 30, "ortacha": 50, "qiyin": 20}
 
 

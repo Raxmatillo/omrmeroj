@@ -24,6 +24,45 @@ router = APIRouter(prefix="/bank", tags=["question-bank"])
 
 
 # =============================================================
+# Fan (Subject)
+# =============================================================
+
+@router.post("/fans", response_model=schemas.FanOut)
+def create_fan_endpoint(
+    payload: schemas.FanIn, user: models.User = Depends(require_teacher), db: Session = Depends(get_db),
+):
+    try:
+        return bs.create_fan(db, teacher_id=user.id, name=payload.name)
+    except bs.BankServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/fans", response_model=list[schemas.FanOut])
+def list_fans_endpoint(user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    return bs.list_fans(db, teacher_id=user.id)
+
+
+@router.put("/fans/{fan_id}", response_model=schemas.FanOut)
+def update_fan_endpoint(
+    fan_id: str, payload: schemas.FanUpdateIn,
+    user: models.User = Depends(require_teacher), db: Session = Depends(get_db),
+):
+    try:
+        return bs.update_fan(db, fan_id, teacher_id=user.id, name=payload.name)
+    except bs.BankServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/fans/{fan_id}")
+def delete_fan_endpoint(fan_id: str, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+    try:
+        bs.delete_fan(db, fan_id, teacher_id=user.id)
+    except bs.BankServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"ok": True}
+
+
+# =============================================================
 # QuestionBankItem
 # =============================================================
 
@@ -39,31 +78,57 @@ def create_question(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/questions/bulk", response_model=list[schemas.BankItemOut])
+def create_questions_bulk(
+    payload: schemas.BankItemBulkIn,
+    user: models.User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """List holida bir nechta savolni bitta so'rovda qo'shish --
+    kitobdan ketma-ket savol kiritganda har safar alohida so'rov
+    yubormaslik uchun. Hammasi yoki hech biri (bitta xato bo'lsa
+    hech biri saqlanmaydi)."""
+    try:
+        items = bs.create_bank_items_bulk(
+            db, teacher_id=user.id,
+            items=[item.model_dump() for item in payload.items],
+        )
+    except bs.BankServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return items
+
+
 @router.get("/questions", response_model=schemas.BankSearchOut)
 def search_questions(
-    fan: str | None = None,
+    fan_id: str | None = None,
     kitob_nomi: str | None = None,
     bolim_nomi: str | None = None,
     search_text: str | None = None,
     difficulty_min: float | None = None,
     difficulty_max: float | None = None,
+    daraja: str | None = None,
     only_unrated: bool = False,
     limit: int = 50,
     offset: int = 0,
     user: models.User = Depends(require_teacher),
     db: Session = Depends(get_db),
 ):
-    result = bs.search_bank_items(
-        db, teacher_id=user.id, fan=fan, kitob_nomi=kitob_nomi, bolim_nomi=bolim_nomi,
-        search_text=search_text, difficulty_min=difficulty_min, difficulty_max=difficulty_max,
-        only_unrated=only_unrated, limit=limit, offset=offset,
-    )
+    try:
+        result = bs.search_bank_items(
+            db, teacher_id=user.id, fan_id=fan_id, kitob_nomi=kitob_nomi, bolim_nomi=bolim_nomi,
+            search_text=search_text, difficulty_min=difficulty_min, difficulty_max=difficulty_max,
+            daraja=daraja, only_unrated=only_unrated, limit=limit, offset=offset,
+        )
+    except bs.BankServiceError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"items": result.items, "total": result.total}
 
 
-@router.get("/sources")
+@router.get("/sources", response_model=schemas.BankSourcesOut)
 def get_sources(user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
-    """Frontend filter dropdown'lari uchun -- mavjud fan/kitob/bo'lim ro'yxati."""
+    """Frontend filter/datalist'lari uchun -- ro'yxatdan o'tgan fanlar
+    (Fan jadvali) + mavjud kitob/bo'lim nomlari (erkin matn, datalist
+    taklifi uchun)."""
     return bs.list_distinct_sources(db, teacher_id=user.id)
 
 
@@ -208,7 +273,7 @@ def auto_fill_endpoint(
 ):
     try:
         report = bs.auto_fill_toplam(
-            db, toplam_id, teacher_id=user.id, fan=payload.fan,
+            db, toplam_id, teacher_id=user.id, fan_id=payload.fan_id,
             qiyinchilik_maqsadi=payload.qiyinchilik_maqsadi,
         )
     except bs.BankServiceError as e:

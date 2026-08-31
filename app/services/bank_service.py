@@ -39,6 +39,96 @@ class BankServiceError(Exception):
 
 
 # =============================================================
+# 0. Fan (Subject) -- CRUD
+#
+# O'qituvchi savol qo'shishdan OLDIN fanni bir marta ro'yxatdan
+# o'tkazadi, keyin har bir savolda shundan TANLAYDI (erkin matn
+# kiritmaydi). Bu -- yozuv xilma-xilligidan (masalan bir xil fan
+# turlicha yozilib, statistika bo'linib ketishidan) himoya qiladi.
+# =============================================================
+
+def create_fan(db: Session, *, teacher_id: str, name: str) -> models.Fan:
+    name = name.strip()
+    if not name:
+        raise BankServiceError("Fan nomi bo'sh bo'lishi mumkin emas")
+
+    already = (
+        db.query(models.Fan)
+        .filter(models.Fan.teacher_id == teacher_id, models.Fan.name == name)
+        .first()
+    )
+    if already is not None:
+        raise BankServiceError(f"'{name}' fani allaqachon ro'yxatdan o'tgan")
+
+    fan = models.Fan(teacher_id=teacher_id, name=name)
+    db.add(fan)
+    db.commit()
+    db.refresh(fan)
+    return fan
+
+
+def get_fan(db: Session, fan_id: str, *, teacher_id: str) -> models.Fan:
+    fan = (
+        db.query(models.Fan)
+        .filter(models.Fan.id == fan_id, models.Fan.teacher_id == teacher_id)
+        .first()
+    )
+    if fan is None:
+        raise BankServiceError("Fan topilmadi")
+    return fan
+
+
+def list_fans(db: Session, *, teacher_id: str) -> list[models.Fan]:
+    return (
+        db.query(models.Fan)
+        .filter(models.Fan.teacher_id == teacher_id)
+        .order_by(models.Fan.name)
+        .all()
+    )
+
+
+def update_fan(db: Session, fan_id: str, *, teacher_id: str, name: str) -> models.Fan:
+    fan = get_fan(db, fan_id, teacher_id=teacher_id)
+    name = name.strip()
+    if not name:
+        raise BankServiceError("Fan nomi bo'sh bo'lishi mumkin emas")
+
+    already = (
+        db.query(models.Fan)
+        .filter(models.Fan.teacher_id == teacher_id, models.Fan.name == name, models.Fan.id != fan_id)
+        .first()
+    )
+    if already is not None:
+        raise BankServiceError(f"'{name}' fani allaqachon ro'yxatdan o'tgan")
+
+    fan.name = name
+    db.commit()
+    db.refresh(fan)
+    return fan
+
+
+def delete_fan(db: Session, fan_id: str, *, teacher_id: str) -> None:
+    """Agar bu fanda hali savollar bo'lsa -- o'CHIRILMAYDI (xato
+    qaytariladi). Sabab: fan_id NOT NULL, shuning uchun "osilib
+    qolgan" savol paydo bo'lmasligi kerak -- o'qituvchi avval o'sha
+    savollarni boshqa fanga ko'chirishi yoki o'chirishi kerak."""
+    fan = get_fan(db, fan_id, teacher_id=teacher_id)
+
+    in_use = (
+        db.query(models.QuestionBankItem)
+        .filter(models.QuestionBankItem.fan_id == fan_id)
+        .count()
+    )
+    if in_use > 0:
+        raise BankServiceError(
+            f"Bu fanda {in_use} ta savol bor -- avval ularni boshqa fanga o'tkazing yoki o'chiring"
+        )
+
+    db.delete(fan)
+    db.commit()
+
+
+# =============================================================
 # 1. QuestionBankItem -- CRUD
 # =============================================================
 
@@ -46,7 +136,7 @@ def create_bank_item(
     db: Session,
     *,
     teacher_id: str,
-    fan: str,
+    fan_id: str,
     savol_html: str,
     variant_a_html: str,
     variant_b_html: str,
@@ -64,9 +154,11 @@ def create_bank_item(
     if letter not in ("A", "B", "C", "D"):
         raise BankServiceError(f"togri_javob noto'g'ri: {togri_javob!r} (A/B/C/D bo'lishi kerak)")
 
+    get_fan(db, fan_id, teacher_id=teacher_id)  # mavjudligi/egaligini tekshiradi
+
     item = models.QuestionBankItem(
         teacher_id=teacher_id,
-        fan=fan.strip(),
+        fan_id=fan_id,
         kitob_nomi=(kitob_nomi or "").strip() or None,
         bolim_nomi=(bolim_nomi or "").strip() or None,
         savol_html=savol_html,
@@ -86,6 +178,62 @@ def create_bank_item(
     return item
 
 
+def create_bank_items_bulk(
+    db: Session, *, teacher_id: str, items: list[dict],
+) -> list[models.QuestionBankItem]:
+    """create_bank_item()ning KO'PLAB yozuv uchun varianti -- kitobdan
+    ketma-ket bir nechta savolni bir vaqtda kiritish uchun (bitta
+    HTTP so'rov, bitta commit). `items` -- create_bank_item() bilan
+    bir xil kalitlarga ega dict'lar ro'yxati (`teacher_id`siz).
+
+    MUHIM: agar RO'YXATDAGI BIRORTA savolda xato (masalan yaroqsiz
+    togri_javob yoki mavjud bo'lmagan fan_id) bo'lsa -- HECH BIRI
+    saqlanmaydi (butun ro'yxat bitta "hammasi yoki hech biri"
+    amaliyot sifatida ishlaydi, yarim-yozilgan holatning oldini
+    olish uchun)."""
+    if not items:
+        raise BankServiceError("Bo'sh ro'yxat -- hech qanday savol berilmagan")
+
+    # Fan egaligini oldindan (bir marta har bir noyob fan_id uchun)
+    # tekshiramiz -- N marta emas.
+    fan_ids = {row["fan_id"] for row in items if row.get("fan_id")}
+    for fan_id in fan_ids:
+        get_fan(db, fan_id, teacher_id=teacher_id)
+
+    created: list[models.QuestionBankItem] = []
+    for idx, row in enumerate(items):
+        togri_javob = row.get("togri_javob", "")
+        letter = togri_javob.strip().upper()
+        if letter not in ("A", "B", "C", "D"):
+            raise BankServiceError(
+                f"{idx + 1}-savolda togri_javob noto'g'ri: {togri_javob!r} (A/B/C/D bo'lishi kerak)"
+            )
+
+        item = models.QuestionBankItem(
+            teacher_id=teacher_id,
+            fan_id=row["fan_id"],
+            kitob_nomi=(row.get("kitob_nomi") or "").strip() or None,
+            bolim_nomi=(row.get("bolim_nomi") or "").strip() or None,
+            savol_html=row["savol_html"],
+            savol_rasm_url=row.get("savol_rasm_url"),
+            savol_rasm_style=row.get("savol_rasm_style", "medium"),
+            jadval_html=row.get("jadval_html"),
+            variant_a_html=row["variant_a_html"],
+            variant_b_html=row["variant_b_html"],
+            variant_c_html=row["variant_c_html"],
+            variant_d_html=row["variant_d_html"],
+            togri_javob=letter,
+            ball=row.get("ball", 1.1),
+        )
+        db.add(item)
+        created.append(item)
+
+    db.commit()
+    for item in created:
+        db.refresh(item)
+    return created
+
+
 def get_bank_item(db: Session, item_id: str, *, teacher_id: str) -> models.QuestionBankItem:
     item = (
         db.query(models.QuestionBankItem)
@@ -101,7 +249,7 @@ def get_bank_item(db: Session, item_id: str, *, teacher_id: str) -> models.Quest
 
 
 _UPDATABLE_FIELDS = (
-    "fan", "kitob_nomi", "bolim_nomi", "savol_html", "savol_rasm_url",
+    "fan_id", "kitob_nomi", "bolim_nomi", "savol_html", "savol_rasm_url",
     "savol_rasm_style", "jadval_html", "variant_a_html", "variant_b_html",
     "variant_c_html", "variant_d_html", "togri_javob", "ball",
 )
@@ -123,9 +271,12 @@ def update_bank_item(db: Session, item_id: str, *, teacher_id: str, **fields) ->
             raise BankServiceError(f"togri_javob noto'g'ri: {fields['togri_javob']!r}")
         fields["togri_javob"] = letter
 
-    for key in ("fan", "kitob_nomi", "bolim_nomi"):
+    if "fan_id" in fields and fields["fan_id"] is not None:
+        get_fan(db, fields["fan_id"], teacher_id=teacher_id)  # mavjudligi/egaligini tekshiradi
+
+    for key in ("kitob_nomi", "bolim_nomi"):
         if key in fields and fields[key] is not None:
-            fields[key] = fields[key].strip() or (None if key != "fan" else fields[key].strip())
+            fields[key] = fields[key].strip() or None
 
     for key, value in fields.items():
         if value is not None:
@@ -165,32 +316,38 @@ def search_bank_items(
     db: Session,
     *,
     teacher_id: str,
-    fan: str | None = None,
+    fan_id: str | None = None,
     kitob_nomi: str | None = None,
     bolim_nomi: str | None = None,
     search_text: str | None = None,
     difficulty_min: float | None = None,
     difficulty_max: float | None = None,
+    daraja: str | None = None,
     only_unrated: bool = False,
     limit: int = 50,
     offset: int = 0,
 ) -> BankSearchResult:
     """
-    - fan/kitob_nomi/bolim_nomi -- aniq mos kelish (exact match).
+    - fan_id/kitob_nomi/bolim_nomi -- aniq mos kelish (exact match).
     - search_text -- savol matni ichidan erkin qidiruv (LIKE, katta-
       kichik harflarga sezgir emas).
     - difficulty_min/max -- QuestionBankItem.difficulty_percent oralig'i
       (masalan faqat "qiyin" savollarni ko'rish uchun difficulty_max=40).
+    - daraja -- QULAYLIK UCHUN: "oson"/"ortacha"/"qiyin" (auto_fill_toplam
+      bilan bir xil segmentlar, pastdagi _DIFFICULTY_BANDS'ga qarang).
+      Berilsa, difficulty_min/max E'TIBORGA OLINMAYDI (daraja ustunlik
+      qiladi) -- ikkalasini bir vaqtda ishlatish shart emas, lekin
+      chalkashlik bo'lmasligi uchun aniq ustunlik tartibi belgilangan.
     - only_unrated=True -- faqat hali baholanmagan (difficulty_percent
-      IS NULL) savollarni qaytaradi; difficulty_min/max bilan birga
+      IS NULL) savollarni qaytaradi; yuqoridagilar bilan birga
       ishlatilmaydi (ular bo'lsa e'tiborga olinmaydi).
     """
     q = db.query(models.QuestionBankItem).filter(
         models.QuestionBankItem.teacher_id == teacher_id
     )
 
-    if fan:
-        q = q.filter(models.QuestionBankItem.fan == fan)
+    if fan_id:
+        q = q.filter(models.QuestionBankItem.fan_id == fan_id)
     if kitob_nomi:
         q = q.filter(models.QuestionBankItem.kitob_nomi == kitob_nomi)
     if bolim_nomi:
@@ -209,6 +366,21 @@ def search_bank_items(
 
     if only_unrated:
         q = q.filter(models.QuestionBankItem.difficulty_percent.is_(None))
+    elif daraja:
+        if daraja not in _DIFFICULTY_BANDS:
+            raise BankServiceError(
+                f"daraja noto'g'ri: {daraja!r} (kutilgan: {', '.join(_DIFFICULTY_BANDS)})"
+            )
+        lo, hi = _DIFFICULTY_BANDS[daraja]
+        q = q.filter(
+            models.QuestionBankItem.difficulty_percent.isnot(None),
+            models.QuestionBankItem.difficulty_percent >= lo,
+        )
+        q = (
+            q.filter(models.QuestionBankItem.difficulty_percent <= hi)
+            if daraja == "oson"
+            else q.filter(models.QuestionBankItem.difficulty_percent < hi)
+        )
     else:
         if difficulty_min is not None:
             q = q.filter(models.QuestionBankItem.difficulty_percent >= difficulty_min)
@@ -226,20 +398,32 @@ def search_bank_items(
 
 
 def list_distinct_sources(db: Session, *, teacher_id: str) -> dict:
-    """Frontend'dagi filter dropdown'larini to'ldirish uchun --
-    o'qituvchining bankida haqiqatan mavjud bo'lgan fan/kitob/bo'lim
-    nomlari ro'yxati (bo'sh qiymatlar chiqarilmaydi)."""
+    """Frontend'dagi filter/datalist'larni to'ldirish uchun.
+
+    - `fanlar` -- endi Fan jadvalidagi RO'YXATDAN O'TGAN barcha fanlar
+      (list_fans() bilan bir xil) -- hali savoli yo'q, lekin
+      ro'yxatdan o'tgan fan ham ko'rsatiladi (o'qituvchi savol
+      qo'shishdan OLDIN fan yaratishi mumkin bo'lishi kerak).
+    - `kitoblar`/`bolimlar` -- hamon erkin matn, mavjud savollardan
+      chiqarilgan noyob qiymatlar (datalist-uslubidagi taklif uchun --
+      qattiq CRUD talab qilinmagan, faqat "qayta-qayta yozishni oldini
+      olish" maqsadida)."""
+    fanlar = list_fans(db, teacher_id=teacher_id)
+
     base = db.query(models.QuestionBankItem).filter(
         models.QuestionBankItem.teacher_id == teacher_id
     )
-    fanlar = [r[0] for r in base.with_entities(models.QuestionBankItem.fan).distinct().all() if r[0]]
     kitoblar = [
         r[0] for r in base.with_entities(models.QuestionBankItem.kitob_nomi).distinct().all() if r[0]
     ]
     bolimlar = [
         r[0] for r in base.with_entities(models.QuestionBankItem.bolim_nomi).distinct().all() if r[0]
     ]
-    return {"fanlar": sorted(fanlar), "kitoblar": sorted(kitoblar), "bolimlar": sorted(bolimlar)}
+    return {
+        "fanlar": fanlar,  # models.Fan obyektlari -- FanOut(from_attributes=True) o'zi serializatsiya qiladi
+        "kitoblar": sorted(kitoblar),
+        "bolimlar": sorted(bolimlar),
+    }
 
 
 # =============================================================
@@ -250,6 +434,12 @@ def create_toplam(
     db: Session, *, teacher_id: str, name: str, savollar_soni: int,
     qiyinchilik_maqsadi: dict | None = None,
 ) -> models.Toplam:
+    # Baza darajasidagi CheckConstraint (ck_toplam_savollar_soni_max90)
+    # bilan bir xil qoida -- shu yerda oldindan tekshirib, foydalanuvchiga
+    # tushunarli xato xabarini beramiz (baza xatosi o'rniga).
+    if not (0 < savollar_soni <= 90):
+        raise BankServiceError("To'plamdagi savollar soni 1 dan 90 gacha bo'lishi kerak")
+
     toplam = models.Toplam(
         teacher_id=teacher_id,
         name=name.strip(),
@@ -412,7 +602,7 @@ def auto_fill_toplam(
     toplam_id: str,
     *,
     teacher_id: str,
-    fan: str,
+    fan_id: str,
     qiyinchilik_maqsadi: dict[str, float],
     exclude_existing: bool = True,
 ) -> AutoFillReport:
@@ -484,7 +674,7 @@ def auto_fill_toplam(
             db.query(models.QuestionBankItem)
             .filter(
                 models.QuestionBankItem.teacher_id == teacher_id,
-                models.QuestionBankItem.fan == fan,
+                models.QuestionBankItem.fan_id == fan_id,
                 models.QuestionBankItem.difficulty_percent.isnot(None),
                 models.QuestionBankItem.difficulty_percent >= lo,
             )
@@ -526,7 +716,7 @@ def auto_fill_toplam(
             db.query(models.QuestionBankItem)
             .filter(
                 models.QuestionBankItem.teacher_id == teacher_id,
-                models.QuestionBankItem.fan == fan,
+                models.QuestionBankItem.fan_id == fan_id,
                 models.QuestionBankItem.difficulty_percent.is_(None),
             )
             .order_by(func.random())
@@ -608,7 +798,7 @@ def toplam_to_question_dicts(db: Session, toplam_id: str, *, teacher_id: str) ->
         result.append({
             "id": item.id,  # bank_item_id -- pastdagi izohga qarang
             "tartib": link.tartib,
-            "fan": item.fan,
+            "fan": item.fan.name,  # YANGI: fan endi relationship (Fan obyekti), .name orqali string olamiz
             "ball": link.ball,
             "savol_html": item.savol_html,
             "savol_rasm_url": item.savol_rasm_url,
