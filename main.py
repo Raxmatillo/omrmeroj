@@ -19,7 +19,6 @@ from app.config import settings
 from app.database import engine
 from app import models
 from app.routers import auth, system, groups, tests, exams, results, uploads, dashboard, bank
-from app.services.job_worker import start_worker, stop_worker  # YANGI
 
 
 
@@ -52,28 +51,19 @@ async def run_bot():
         logger.error(f"❌ Bot xatosi: {e}")
 
 # ─── LIFESPAN ───────────────────────────────────────────────
-# YANGI: ikkita alohida (if/else) lifespan funksiyasi o'rniga BITTA
-# umumiy funksiya -- chunki endi job_worker ENDI BOT YOQILGAN-YOQILMAGANIDAN
-# QAT'I NAZAR har doim ishga tushishi kerak (imtihon generatsiyasi va
-# natija tekshirish bot yoqilmagan bo'lsa ham, API orqali ishlatiladi).
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("Ish (job) worker ishga tushirilmoqda...")
-    job_task = start_worker()  # YANGI -- durable job worker
-
-    bot_task = None
-    if ENABLE_BOT and TELEGRAM_TOKEN:
+if ENABLE_BOT and TELEGRAM_TOKEN:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         logger.info("Bot ishga tushirilmoqda...")
-        bot_task = asyncio.create_task(run_bot())
-    else:
+        task = asyncio.create_task(run_bot())
+        yield
+        task.cancel()
+        logger.info("Bot to'xtatildi")
+else:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         logger.info("ℹ️ Bot o'chirilgan (ENABLE_BOT=false yoki token yo'q)")
-
-    yield
-
-    stop_worker()  # YANGI
-    if bot_task:
-        bot_task.cancel()
-    logger.info("Server to'xtatildi")
+        yield
 
 def migrate_old_database():
     """Eski bazani yangi joyga ko‘chiradi (agar mavjud bo‘lsa)"""

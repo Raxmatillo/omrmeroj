@@ -127,10 +127,10 @@ def _build_download_url(result_id: str) -> str:
 
 
 def check_answer_sheet(
-        db: Session,
-        file_bytes: bytes,
-        filename_hint: str = "sheet.pdf",
-        requester_teacher_id: str | None = None,
+    db: Session,
+    file_bytes: bytes,
+    filename_hint: str = "sheet.pdf",
+    requester_teacher_id: str | None = None,
 ) -> models.Result:
     """
     file_bytes    -- bot/API orqali kelgan PDF yoki rasm baytlari.
@@ -199,6 +199,7 @@ def check_answer_sheet(
     variant_status = report.get("paper_variant_status")
     expected_variant = exam_student.paper_variant_number
 
+
     # YANGI
     variant_mismatch = False
     if expected_variant is not None:
@@ -207,6 +208,7 @@ def check_answer_sheet(
         # Raqam to'g'ri topilgan bo'lsa, bo'yash biroz noaniq bo'lsa ham
         # bu mismatch emas (chalkash xabar bermaslik uchun).
         variant_mismatch = (detected_variant is None) or (detected_variant != expected_variant)
+        
 
     correct = incorrect = blank = ambiguous = 0
 
@@ -249,8 +251,8 @@ def check_answer_sheet(
         ambiguous_count=ambiguous,
         total_score=total_score,
         per_subject_json=per_subject,
-        detected_paper_variant=detected_variant,  # YANGI
-        variant_mismatch=variant_mismatch,  # YANGI
+        detected_paper_variant=detected_variant,   # YANGI
+        variant_mismatch=variant_mismatch,         # YANGI
         status=status,
     )
     db.add(result)
@@ -285,7 +287,7 @@ def check_answer_sheet(
         elif exam and exam.toplam:  # YANGI: Toplam-asosidagi imtihonlarda variant yo'q
             exam_name = exam.toplam.name
 
-        variant_label = exam_student.variant.label if exam_student.variant else None  # <-- YANGI
+        variant_label = exam_student.variant.label if exam_student.variant else None   # <-- YANGI
 
         pdf_path = Path(settings.OUTPUT_DIR) / "results" / f"{result.id}.pdf"
         generate_result_pdf(
@@ -301,7 +303,7 @@ def check_answer_sheet(
             per_subject=per_subject,
             scanned_image_path=scanned_path,
             download_url=download_url,
-            variant_label=variant_label,  # <-- YANGI
+            variant_label=variant_label,   # <-- YANGI
             # YANGI: allaqachon hisoblangan statistikani to'g'ridan-to'g'ri
             # uzatamiz -- generate_result_pdf ichida qayta hisoblash shart
             # emas (bir xil ma'lumotni ikki marta sanamaslik uchun).
@@ -316,7 +318,6 @@ def check_answer_sheet(
         logger.exception("Natija PDF generatsiyasida xato -- Result baribir saqlandi")
 
     return result
-
 
 # app/services/omr_service.py -- QO'SHIMCHA funksiyalar
 def analyze_answer_sheet(file_bytes: bytes, filename_hint: str = "sheet.pdf") -> dict:
@@ -336,7 +337,7 @@ def analyze_answer_sheet(file_bytes: bytes, filename_hint: str = "sheet.pdf") ->
 
 
 def _score_from_raw_answers(
-        answer_key: dict, raw_answers: dict, detected_variant, variant_mismatch: bool
+    answer_key: dict, raw_answers: dict, detected_variant, variant_mismatch: bool
 ) -> dict:
     """raw_answers asosida ballarni hisoblaydi -- DB bilan ishlamaydi,
     shuning uchun ham dastlabki hisoblashda, ham qo'lda tuzatishdan
@@ -392,7 +393,7 @@ def compute_scores(db: Session, booklet_id: str, report: dict) -> dict:
     detected_variant = report.get("detected_paper_variant")
     expected_variant = exam_student.paper_variant_number
     variant_mismatch = expected_variant is not None and (
-            detected_variant is None or detected_variant != expected_variant
+        detected_variant is None or detected_variant != expected_variant
     )
 
     scores = _score_from_raw_answers(
@@ -403,7 +404,7 @@ def compute_scores(db: Session, booklet_id: str, report: dict) -> dict:
 
 
 def recompute_scores_with_corrections(
-        db: Session, exam_student_id: str, previous_scores: dict, corrections: dict[str, str | None]
+    db: Session, exam_student_id: str, previous_scores: dict, corrections: dict[str, str | None]
 ) -> dict:
     """Qo'lda tuzatilgan javoblar bilan ballarni QAYTA hisoblaydi.
     DB'ga hech narsa yozmaydi -- hali ham 'pending' holatda."""
@@ -495,7 +496,6 @@ def save_result(db: Session, exam_student_id: str, scores: dict, warped_image) -
         logger.exception("Natija PDF generatsiyasida xato -- Result baribir saqlandi")
 
     return result
-
 
 def apply_manual_corrections(db: Session, result: models.Result, corrections: dict[str, str | None]) -> models.Result:
     """
