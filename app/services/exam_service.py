@@ -442,7 +442,13 @@ def create_toplam_exam_job(
     db.add(exam)
     db.flush()
 
-    job = models.ProcessingJob(kind="booklet_generation", exam_id=exam.id, status=models.JobStatus.queued)
+    # TUZATILDI: kind endi "toplam_booklet_generation" -- eski
+    # "booklet_generation" bilan BIR XIL bo'lsa, job_worker.py buni
+    # eski (Variant asosidagi) run_exam_generation()ga yuborib
+    # qo'yardi, u esa exam.test_set_id kutadi (Toplam asosidagi
+    # imtihonda bu maydon bo'sh) -- natijada har doim "Test to'plami
+    # topilmadi" xatosi bilan "failed" bo'lib qolardi.
+    job = models.ProcessingJob(kind="toplam_booklet_generation", exam_id=exam.id, status=models.JobStatus.queued)
     db.add(job)
     db.commit()
     db.refresh(exam)

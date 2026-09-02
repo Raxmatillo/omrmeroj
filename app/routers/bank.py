@@ -108,6 +108,8 @@ def search_questions(
     difficulty_max: float | None = None,
     daraja: str | None = None,
     only_unrated: bool = False,
+    times_shown_min: int | None = None,
+    times_shown_max: int | None = None,
     limit: int = 50,
     offset: int = 0,
     user: models.User = Depends(require_teacher),
@@ -117,7 +119,8 @@ def search_questions(
         result = bs.search_bank_items(
             db, teacher_id=user.id, fan_id=fan_id, kitob_nomi=kitob_nomi, bolim_nomi=bolim_nomi,
             search_text=search_text, difficulty_min=difficulty_min, difficulty_max=difficulty_max,
-            daraja=daraja, only_unrated=only_unrated, limit=limit, offset=offset,
+            daraja=daraja, only_unrated=only_unrated, times_shown_min=times_shown_min, times_shown_max=times_shown_max,
+            limit=limit, offset=offset,
         )
     except bs.BankServiceError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -125,11 +128,11 @@ def search_questions(
 
 
 @router.get("/sources", response_model=schemas.BankSourcesOut)
-def get_sources(user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
+def get_sources(fan_id: str | None = None, user: models.User = Depends(require_teacher), db: Session = Depends(get_db)):
     """Frontend filter/datalist'lari uchun -- ro'yxatdan o'tgan fanlar
     (Fan jadvali) + mavjud kitob/bo'lim nomlari (erkin matn, datalist
     taklifi uchun)."""
-    return bs.list_distinct_sources(db, teacher_id=user.id)
+    return bs.list_distinct_sources(db, teacher_id=user.id, fan_id=fan_id)
 
 
 @router.get("/questions/{item_id}", response_model=schemas.BankItemOut)

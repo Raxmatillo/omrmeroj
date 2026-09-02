@@ -295,6 +295,12 @@ class ProcessingJob(Base):
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime, nullable=True)
+    # YANGI: durable job_worker.py uchun -- ishga kerakli qo'shimcha
+    # ma'lumot (masalan paper_variant_count, file_path, teacher_id) va
+    # necha marta qayta urinilgani (server qulab, "processing"da qolib
+    # ketgan ishlarni tiklashda ishlatiladi).
+    payload_json = Column(JSON, nullable=True)
+    attempts = Column(Integer, default=0, nullable=False)
 
 
 

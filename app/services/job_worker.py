@@ -120,6 +120,17 @@ def _run_booklet_generation(job: "models.ProcessingJob") -> None:
     run_exam_generation(job.exam_id, job.id, paper_variant_count)
 
 
+def _run_toplam_booklet_generation(job: "models.ProcessingJob") -> None:
+    """
+    YANGI: Savollar banki (Toplam) asosida yaratilgan imtihonlar uchun.
+    Eski _run_booklet_generation'dan FARQI -- run_toplam_exam_generation()
+    chaqiriladi, chunki bu turdagi Exam.test_set_id emas, Exam.toplam_id
+    orqali savollarni oladi.
+    """
+    from app.services.exam_service import run_toplam_exam_generation
+    run_toplam_exam_generation(job.exam_id, job.id)
+
+
 def _run_omr_check(job: "models.ProcessingJob") -> None:
     from app.services.omr_service import run_omr_check_job
     payload = job.payload_json or {}
@@ -133,6 +144,7 @@ def _run_omr_check(job: "models.ProcessingJob") -> None:
 
 _JOB_HANDLERS = {
     "booklet_generation": _run_booklet_generation,
+    "toplam_booklet_generation": _run_toplam_booklet_generation,  # YANGI
     "omr_check": _run_omr_check,
 }
 

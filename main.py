@@ -19,6 +19,7 @@ from app.config import settings
 from app.database import engine
 from app import models
 from app.routers import auth, system, groups, tests, exams, results, uploads, dashboard, bank
+from app.services.job_worker import start_worker, stop_worker  # YANGI -- durable job worker
 
 
 
@@ -56,14 +57,20 @@ if ENABLE_BOT and TELEGRAM_TOKEN:
     async def lifespan(app: FastAPI):
         logger.info("Bot ishga tushirilmoqda...")
         task = asyncio.create_task(run_bot())
+        logger.info("Ish (job) worker ishga tushirilmoqda...")  # YANGI
+        start_worker()  # YANGI -- durable job worker (imtihon generatsiyasi, OMR tekshiruvi)
         yield
         task.cancel()
+        stop_worker()  # YANGI
         logger.info("Bot to'xtatildi")
 else:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         logger.info("ℹ️ Bot o'chirilgan (ENABLE_BOT=false yoki token yo'q)")
+        logger.info("Ish (job) worker ishga tushirilmoqda...")  # YANGI
+        start_worker()  # YANGI -- durable job worker (imtihon generatsiyasi, OMR tekshiruvi)
         yield
+        stop_worker()  # YANGI
 
 def migrate_old_database():
     """Eski bazani yangi joyga ko‘chiradi (agar mavjud bo‘lsa)"""

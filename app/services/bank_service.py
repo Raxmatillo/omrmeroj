@@ -39,6 +39,82 @@ class BankServiceError(Exception):
 
 
 # =============================================================
+# DTM qoidasi: "Majburiy fanlar" bloki (pptx slide 1 va 3) --
+# tartib 1-30 oralig'ida FAQAT shu 3 fan bo'lishi mumkin, har biridan
+# 10 tadan OSHMASLIGI SHART (jami 30 ta). Fan nomlari `Fan` jadvalida
+# saqlangan matn bilan ANIQ mos kelishi kerak (katta-kichik harf
+# farqlanadi -- agar o'qituvchi "ona tili" deb kichik harf bilan
+# ro'yxatdan o'tkazgan bo'lsa, bu tekshiruv uni "Ona tili" deb
+# TANIMAYDI -- shuning uchun frontend'da fan nomlarini standartlashtirib
+# ko'rsatish tavsiya etiladi).
+# =============================================================
+MAJBURIY_FANLAR = {"Ona tili", "Matematika", "Tarix"}
+MAJBURIY_FAN_LIMIT = 10
+MAJBURIY_SLOT_SIZE = 30  # 1-30 oraliq -- "majburiy fanlar" bloki
+
+
+def _validate_majburiy_slot(
+    db: Session, toplam_id: str, bank_item: models.QuestionBankItem, tartib: int,
+    *, exclude_bank_item_id: str | None = None,
+) -> None:
+    """
+    YANGI: agar savol "majburiy fanlar" blokiga (tartib 1-30
+    oralig'iga) qo'shilayotgan bo'lsa -- fan nomi FAQAT
+    Ona tili/Matematika/Tarix bo'lishi, va har biridan 10 tadan
+    OSHMASLIGI SHART. `exclude_bank_item_id` -- ball/tartib
+    yangilanayotganda o'sha savolning o'zini sanoqqa qo'shib
+    yubormaslik uchun.
+    """
+    if tartib > MAJBURIY_SLOT_SIZE:
+        return  # bu savol majburiy blokdan tashqarida -- tekshiruv shart emas
+
+    fan_nomi = bank_item.fan.name if bank_item.fan else ''
+
+    if fan_nomi not in MAJBURIY_FANLAR:
+        raise BankServiceError(
+            f"1-{MAJBURIY_SLOT_SIZE}-tartib -- 'Majburiy fanlar' bloki. "
+            f"Bu yerga faqat {', '.join(sorted(MAJBURIY_FANLAR))} fanlaridan "
+            f"savol qo'shish mumkin (kiritilgan: '{bank_item.fan}')."
+        )
+
+    query = (
+        db.query(models.ToplamQuestion)
+        .join(models.QuestionBankItem, models.ToplamQuestion.bank_item_id == models.QuestionBankItem.id)
+        .filter(
+            models.ToplamQuestion.toplam_id == toplam_id,
+            models.ToplamQuestion.tartib <= MAJBURIY_SLOT_SIZE,
+            models.QuestionBankItem.fan_id == bank_item.fan_id,
+        )
+    )
+    if exclude_bank_item_id:
+        query = query.filter(models.ToplamQuestion.bank_item_id != exclude_bank_item_id)
+    same_fan_count = query.count()
+
+    if same_fan_count >= MAJBURIY_FAN_LIMIT:
+        raise BankServiceError(
+            f"'{bank_item.fan}' fanidan majburiy blokda allaqachon "
+            f"{MAJBURIY_FAN_LIMIT} ta savol bor -- ko'proq qo'shib bo'lmaydi."
+        )
+
+
+def _validate_tartib_free(db: Session, toplam_id: str, tartib: int, *, exclude_bank_item_id: str | None = None) -> None:
+    """
+    YANGI: bitta to'plamda ikkita savol bir xil tartib raqamiga ega
+    bo'lib qolmasligi uchun. Agar tekshirilmasa, javob varag'ida
+    ikkita savol bitta bubble-qatorga to'qnashib, PDF generatsiya
+    paytida noto'g'ri/kutilmagan natijaga olib kelishi mumkin.
+    """
+    query = db.query(models.ToplamQuestion).filter(
+        models.ToplamQuestion.toplam_id == toplam_id,
+        models.ToplamQuestion.tartib == tartib,
+    )
+    if exclude_bank_item_id:
+        query = query.filter(models.ToplamQuestion.bank_item_id != exclude_bank_item_id)
+    if query.first() is not None:
+        raise BankServiceError(f"Tartib #{tartib} allaqachon band -- avval o'sha savolni olib tashlang yoki boshqa tartib tanlang.")
+
+
+# =============================================================
 # 0. Fan (Subject) -- CRUD
 #
 # O'qituvchi savol qo'shishdan OLDIN fanni bir marta ro'yxatdan
@@ -324,6 +400,8 @@ def search_bank_items(
     difficulty_max: float | None = None,
     daraja: str | None = None,
     only_unrated: bool = False,
+    times_shown_min: int | None = None,  # ✅ QO'SHILDI
+    times_shown_max: int | None = None,  # ✅ QO'SHILDI
     limit: int = 50,
     offset: int = 0,
 ) -> BankSearchResult:
@@ -387,6 +465,10 @@ def search_bank_items(
         if difficulty_max is not None:
             q = q.filter(models.QuestionBankItem.difficulty_percent <= difficulty_max)
 
+    if times_shown_min is not None:
+        q = q.filter(models.QuestionBankItem.times_shown >= times_shown_min)
+    if times_shown_max is not None:
+        q = q.filter(models.QuestionBankItem.times_shown <= times_shown_max)
     total = q.count()
     items = (
         q.order_by(models.QuestionBankItem.created_at.desc())
@@ -397,22 +479,17 @@ def search_bank_items(
     return BankSearchResult(items=items, total=total)
 
 
-def list_distinct_sources(db: Session, *, teacher_id: str) -> dict:
-    """Frontend'dagi filter/datalist'larni to'ldirish uchun.
-
-    - `fanlar` -- endi Fan jadvalidagi RO'YXATDAN O'TGAN barcha fanlar
-      (list_fans() bilan bir xil) -- hali savoli yo'q, lekin
-      ro'yxatdan o'tgan fan ham ko'rsatiladi (o'qituvchi savol
-      qo'shishdan OLDIN fan yaratishi mumkin bo'lishi kerak).
-    - `kitoblar`/`bolimlar` -- hamon erkin matn, mavjud savollardan
-      chiqarilgan noyob qiymatlar (datalist-uslubidagi taklif uchun --
-      qattiq CRUD talab qilinmagan, faqat "qayta-qayta yozishni oldini
-      olish" maqsadida)."""
+def list_distinct_sources(db: Session, *, teacher_id: str, fan_id: str | None = None) -> dict:
+    """Frontend'dagi filter/datalist'larni to'ldirish uchun."""
     fanlar = list_fans(db, teacher_id=teacher_id)
 
     base = db.query(models.QuestionBankItem).filter(
         models.QuestionBankItem.teacher_id == teacher_id
     )
+    # ✅ YANGI QO'SHILDI:
+    if fan_id:
+        base = base.filter(models.QuestionBankItem.fan_id == fan_id)
+
     kitoblar = [
         r[0] for r in base.with_entities(models.QuestionBankItem.kitob_nomi).distinct().all() if r[0]
     ]
@@ -420,7 +497,7 @@ def list_distinct_sources(db: Session, *, teacher_id: str) -> dict:
         r[0] for r in base.with_entities(models.QuestionBankItem.bolim_nomi).distinct().all() if r[0]
     ]
     return {
-        "fanlar": fanlar,  # models.Fan obyektlari -- FanOut(from_attributes=True) o'zi serializatsiya qiladi
+        "fanlar": fanlar,
         "kitoblar": sorted(kitoblar),
         "bolimlar": sorted(bolimlar),
     }
@@ -485,12 +562,16 @@ def delete_toplam(db: Session, toplam_id: str, *, teacher_id: str) -> None:
 
 def add_question_to_toplam(
     db: Session, toplam_id: str, bank_item_id: str, *, teacher_id: str,
-    tartib: int, ball: float | None = None,
+    tartib: int, ball: float | None = None, skip_majburiy_check: bool = False,
 ) -> models.ToplamQuestion:
     """`ball` berilmasa, bank_item'ning standart ballidan olinadi
     (lekin shu to'plam uchun MUSTAQIL nusxa sifatida saqlanadi --
     keyin bank_item.ball o'zgarsa ham, bu to'plamdagi ball o'zgarmay
-    qoladi, chunki ToplamQuestion.ball ustuni alohida)."""
+    qoladi, chunki ToplamQuestion.ball ustuni alohida).
+
+    `skip_majburiy_check=True` -- agar to'plam DTM formatida bo'lmasa
+    (masalan "majburiy fanlar" tushunchasi ishlatilmaydigan boshqa
+    turdagi test) qo'lda o'chirib qo'yish mumkin."""
     toplam = get_toplam(db, toplam_id, teacher_id=teacher_id)
     item = get_bank_item(db, bank_item_id, teacher_id=teacher_id)
 
@@ -504,6 +585,11 @@ def add_question_to_toplam(
     )
     if already is not None:
         raise BankServiceError("Bu savol allaqachon shu to'plamda bor")
+
+    # YANGI: tartib to'qnashuvi va "majburiy fanlar" qoidasi tekshiruvi
+    _validate_tartib_free(db, toplam_id, tartib)
+    if not skip_majburiy_check:
+        _validate_majburiy_slot(db, toplam_id, item, tartib)
 
     link = models.ToplamQuestion(
         toplam_id=toplam.id,
@@ -534,14 +620,37 @@ def remove_question_from_toplam(db: Session, toplam_id: str, bank_item_id: str, 
 
 def reorder_toplam_questions(db: Session, toplam_id: str, *, teacher_id: str, tartib_map: dict[str, int]) -> None:
     """tartib_map: {bank_item_id: yangi_tartib}. Faqat ro'yxatdagi
-    savollarning tartibini yangilaydi, qolganlariga tegmaydi."""
+    savollarning tartibini yangilaydi, qolganlariga tegmaydi.
+
+    YANGI: yangi tartib qiymatlari orasida O'ZARO takrorlanish
+    yo'qligi, va to'plamdagi TEGILMAYDIGAN qolgan savollar bilan ham
+    to'qnashmasligi tekshiriladi."""
     get_toplam(db, toplam_id, teacher_id=teacher_id)
+
+    # 1) tartib_map ICHIDA o'zaro takrorlanish yo'qligini tekshirish
+    new_tartib_values = list(tartib_map.values())
+    if len(new_tartib_values) != len(set(new_tartib_values)):
+        raise BankServiceError("tartib_map ichida takrorlangan tartib raqami bor")
+
     links = (
         db.query(models.ToplamQuestion)
         .filter(models.ToplamQuestion.toplam_id == toplam_id)
         .all()
     )
     by_item = {link.bank_item_id: link for link in links}
+
+    # 2) TEGILMAYDIGAN (tartib_map'da yo'q) savollar bilan to'qnashuvni tekshirish
+    untouched_tartibs = {
+        link.tartib for bank_item_id, link in by_item.items()
+        if bank_item_id not in tartib_map
+    }
+    collision = untouched_tartibs & set(new_tartib_values)
+    if collision:
+        raise BankServiceError(
+            f"Yangi tartib(lar) {sorted(collision)} boshqa (o'zgartirilmayotgan) "
+            f"savol(lar) bilan to'qnashadi."
+        )
+
     for bank_item_id, new_tartib in tartib_map.items():
         link = by_item.get(bank_item_id)
         if link is not None:
