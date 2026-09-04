@@ -180,7 +180,8 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
                 f"• 15-savol → A\n"
                 f"• 24-savol → B\n"
                 f"• 24-savol → boʻsh\n\n"
-                f"<i>Barchasini bitta xabarda yuboring.</i>"
+                f"<i>Barchasini bitta xabarda yuboring.</i>",
+                parse_mode="HTML"
             )
 
             # 📋 Tugmalar (faqat 10 tagacha)
@@ -193,7 +194,8 @@ async def _process_answer_sheet(message: Message, state: FSMContext, file_id: st
                 ])
                 await message.answer(
                     "📋 Noaniq savollar roʻyxati:",
-                    reply_markup=kb
+                    reply_markup=kb,
+                    parse_mode="HTML"
                 )
 
             await state.set_state(ManualCorrectionStates.waiting_correction)
@@ -274,7 +276,8 @@ async def handle_manual_correction(message: Message, state: FSMContext):
 
     # 🔥 Tuzatilgan natijani yangi xabar sifatida emas, balki status_msg o'rniga yuboramiz
     await message.answer(
-        f"✅ <b>Tuzatildi!</b>\n\n{_format_preview(new_scores, student_name, is_owner=True)}{note}"
+        f"✅ <b>Tuzatildi!</b>\n\n{_format_preview(new_scores, student_name, is_owner=True)}{note}",
+        parse_mode="HTML"
     )
     await _offer_save(message)
 
