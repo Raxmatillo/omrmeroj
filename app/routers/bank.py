@@ -6,8 +6,11 @@ Bu fayl app/services/bank_service.py (2-qism)ni HTTP orqali ochadi.
 Uslub va auth naqshi app/routers/groups.py bilan bir xil.
 """
 from __future__ import annotations
+from io import BytesIO
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File
+from fastapi.responses import FileResponse
+from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app import models, schemas
@@ -19,6 +22,9 @@ from app.services.exam_service import (
     create_toplam_exam_job,
     run_toplam_exam_generation,
 )
+
+from app.utils.excel_import_bank import parse_bank_excel, ExcelImportError
+
 
 router = APIRouter(prefix="/bank", tags=["question-bank"])
 
@@ -304,3 +310,72 @@ def create_exam_from_toplam_endpoint(
 
     background_tasks.add_task(run_toplam_exam_generation, exam.id, job.id)
     return exam
+
+
+
+
+@router.post("/questions/import-excel")
+async def import_bank_excel(
+    file: UploadFile = File(...),
+    user: models.User = Depends(require_teacher),
+    db: Session = Depends(get_db),
+):
+    """Excel'dan savollar bankiga ommaviy import."""
+    if not file.filename or not file.filename.endswith((".xlsx", ".xls")):
+        raise HTTPException(status_code=400, detail="Faqat .xlsx yoki .xls fayl")
+
+    content = await file.read()
+    try:
+        rows = parse_bank_excel(BytesIO(content))
+    except ExcelImportError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Fanlarni avtomatik yaratish/topish
+    created_count = 0
+    for row in rows:
+        # 1. Fan mavjudligini tekshiramiz, bo'lmasa yaratamiz
+        fan = (
+            db.query(models.Fan)
+            .filter(models.Fan.teacher_id == user.id, models.Fan.name == row["fan"])
+            .first()
+        )
+        if not fan:
+            fan = models.Fan(teacher_id=user.id, name=row["fan"])
+            db.add(fan)
+            db.flush()
+
+        # 2. Bank item yaratamiz
+        item = models.QuestionBankItem(
+            teacher_id=user.id,
+            fan_id=fan.id,
+            kitob_nomi=row.get("kitob"),
+            bolim_nomi=row.get("bolim"),
+            savol_html=row["savol_html"],
+            variant_a_html=row["variant_a_html"],
+            variant_b_html=row["variant_b_html"],
+            variant_c_html=row["variant_c_html"],
+            variant_d_html=row["variant_d_html"],
+            togri_javob=row["togri_javob"],
+            savol_rasm_url=row.get("savol_rasm_url"),
+        )
+        db.add(item)
+        created_count += 1
+
+    db.commit()
+    return {"added": created_count}
+
+
+@router.get("/questions/sample-excel")
+def download_bank_sample(
+    user: models.User = Depends(require_teacher),
+):
+    """Namuna Excel faylini yuklab olish."""
+    # Loyihaning static fayllari papkasida saqlanadi
+    sample_path = Path(__file__).resolve().parents[2] / "static" / "namuna_bank.xlsx"
+    if not sample_path.exists():
+        raise HTTPException(status_code=404, detail="Namuna fayl topilmadi")
+    return FileResponse(
+        str(sample_path),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename="namuna_bank.xlsx",
+    )

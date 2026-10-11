@@ -33,6 +33,9 @@ from sqlalchemy.orm import Session
 
 from app import models
 
+import re
+import hashlib
+from html import unescape
 
 class BankServiceError(Exception):
     """Foydalanuvchiga to'g'ridan-to'g'ri ko'rsatsa bo'ladigan xato."""
@@ -51,6 +54,62 @@ class BankServiceError(Exception):
 MAJBURIY_FANLAR = {"Ona tili", "Matematika", "Tarix"}
 MAJBURIY_FAN_LIMIT = 10
 MAJBURIY_SLOT_SIZE = 30  # 1-30 oraliq -- "majburiy fanlar" bloki
+
+def _normalize_question_text(html: str) -> str:
+    """
+    HTML'dan matnni ajratib, normallashtiradi:
+    - HTML teglarni olib tashlaydi
+    - HTML entity'larni (&nbsp; va h.k.) dekod qiladi
+    - Ko'p bo'sh joylarni bitta probelga almashtiradi
+    - Bosh/oxirgi bo'sh joylarni olib tashlaydi
+    - Kichik harflarga o'giradi
+    """
+    if not html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = unescape(text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+
+def _question_hash(savol_html: str, fan_id: str) -> str:
+    """
+    Savolning unikal hash'i (fan_id + normallashtirilgan savol matni).
+    Bir xil fan ichida bir xil savolni aniqlash uchun.
+    """
+    normalized = _normalize_question_text(savol_html)
+    raw = f"{fan_id}::{normalized}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _check_duplicate(
+    db: Session,
+    *,
+    teacher_id: str,
+    fan_id: str,
+    savol_html: str,
+    exclude_item_id: str | None = None,
+) -> models.QuestionBankItem | None:
+    """
+    Bir xil fan ichida bir xil savol mavjudligini tekshiradi.
+    Mavjud bo'lsa -- o'sha itemni qaytaradi, aks holda None.
+    `exclude_item_id` -- update paytida o'zini tekshirmaslik uchun.
+    """
+    normalized_new = _normalize_question_text(savol_html)
+    if not normalized_new:
+        return None
+
+    query = db.query(models.QuestionBankItem).filter(
+        models.QuestionBankItem.teacher_id == teacher_id,
+        models.QuestionBankItem.fan_id == fan_id,
+    )
+    if exclude_item_id:
+        query = query.filter(models.QuestionBankItem.id != exclude_item_id)
+
+    for item in query.all():
+        if _normalize_question_text(item.savol_html) == normalized_new:
+            return item
+    return None
 
 
 def _validate_majburiy_slot(
@@ -230,7 +289,20 @@ def create_bank_item(
     if letter not in ("A", "B", "C", "D"):
         raise BankServiceError(f"togri_javob noto'g'ri: {togri_javob!r} (A/B/C/D bo'lishi kerak)")
 
-    get_fan(db, fan_id, teacher_id=teacher_id)  # mavjudligi/egaligini tekshiradi
+    get_fan(db, fan_id, teacher_id=teacher_id)
+
+    # ✅ YANGI: takrorlanishni tekshirish
+    duplicate = _check_duplicate(
+        db,
+        teacher_id=teacher_id,
+        fan_id=fan_id,
+        savol_html=savol_html,
+    )
+    if duplicate is not None:
+        raise BankServiceError(
+            f"Bu savol allaqachon mavjud (ID: {duplicate.id}). "
+            f"Takroriy savol qo'shilmadi."
+        )
 
     item = models.QuestionBankItem(
         teacher_id=teacher_id,
@@ -257,24 +329,39 @@ def create_bank_item(
 def create_bank_items_bulk(
     db: Session, *, teacher_id: str, items: list[dict],
 ) -> list[models.QuestionBankItem]:
-    """create_bank_item()ning KO'PLAB yozuv uchun varianti -- kitobdan
-    ketma-ket bir nechta savolni bir vaqtda kiritish uchun (bitta
-    HTTP so'rov, bitta commit). `items` -- create_bank_item() bilan
-    bir xil kalitlarga ega dict'lar ro'yxati (`teacher_id`siz).
-
-    MUHIM: agar RO'YXATDAGI BIRORTA savolda xato (masalan yaroqsiz
-    togri_javob yoki mavjud bo'lmagan fan_id) bo'lsa -- HECH BIRI
-    saqlanmaydi (butun ro'yxat bitta "hammasi yoki hech biri"
-    amaliyot sifatida ishlaydi, yarim-yozilgan holatning oldini
-    olish uchun)."""
+    """
+    create_bank_item()ning KO'PLAB yozuv uchun varianti.
+    
+    MUHIM: agar RO'YXATDAGI BIRORTA savolda xato yoki takrorlanish
+    bo'lsa -- HECH BIRI saqlanmaydi (butun ro'yxat bitta "hammasi
+    yoki hech biri" amaliyoti sifatida ishlaydi).
+    """
     if not items:
         raise BankServiceError("Bo'sh ro'yxat -- hech qanday savol berilmagan")
 
-    # Fan egaligini oldindan (bir marta har bir noyob fan_id uchun)
-    # tekshiramiz -- N marta emas.
     fan_ids = {row["fan_id"] for row in items if row.get("fan_id")}
     for fan_id in fan_ids:
         get_fan(db, fan_id, teacher_id=teacher_id)
+
+    # ✅ YANGI: bazadagi mavjud savollarni oldindan yuklab olamiz
+    # (har bir fan uchun alohida query qilmaslik uchun)
+    existing_hashes: dict[str, set[str]] = {}  # {fan_id: {hash1, hash2, ...}}
+    for fan_id in fan_ids:
+        existing_items = (
+            db.query(models.QuestionBankItem)
+            .filter(
+                models.QuestionBankItem.teacher_id == teacher_id,
+                models.QuestionBankItem.fan_id == fan_id,
+            )
+            .all()
+        )
+        existing_hashes[fan_id] = {
+            _question_hash(item.savol_html, item.fan_id)
+            for item in existing_items
+        }
+
+    # ✅ YANGI: ro'yxatning o'z ichidagi hash'larni yig'amiz
+    seen_hashes: set[str] = set()
 
     created: list[models.QuestionBankItem] = []
     for idx, row in enumerate(items):
@@ -285,9 +372,27 @@ def create_bank_items_bulk(
                 f"{idx + 1}-savolda togri_javob noto'g'ri: {togri_javob!r} (A/B/C/D bo'lishi kerak)"
             )
 
+        fan_id = row["fan_id"]
+
+        # ✅ YANGI: bazadagi takrorlanishni tekshirish
+        new_hash = _question_hash(row["savol_html"], fan_id)
+        if new_hash in existing_hashes.get(fan_id, set()):
+            raise BankServiceError(
+                f"{idx + 1}-savol allaqachon bazada mavjud: "
+                f"'{row['savol_html'][:60]}...'"
+            )
+
+        # ✅ YANGI: ro'yxat ichidagi takrorlanishni tekshirish
+        if new_hash in seen_hashes:
+            raise BankServiceError(
+                f"{idx + 1}-savol ro'yxatda takrorlanmoqda: "
+                f"'{row['savol_html'][:60]}...'"
+            )
+        seen_hashes.add(new_hash)
+
         item = models.QuestionBankItem(
             teacher_id=teacher_id,
-            fan_id=row["fan_id"],
+            fan_id=fan_id,
             kitob_nomi=(row.get("kitob_nomi") or "").strip() or None,
             bolim_nomi=(row.get("bolim_nomi") or "").strip() or None,
             savol_html=row["savol_html"],
@@ -332,9 +437,7 @@ _UPDATABLE_FIELDS = (
 
 
 def update_bank_item(db: Session, item_id: str, *, teacher_id: str, **fields) -> models.QuestionBankItem:
-    """Faqat berilgan (None bo'lmagan) maydonlarni yangilaydi -- qisman
-    (partial) update. Masalan faqat `ball`ni o'zgartirish uchun
-    `update_bank_item(db, id, teacher_id=t, ball=2.2)` yetarli."""
+    """Faqat berilgan (None bo'lmagan) maydonlarni yangilaydi -- qisman (partial) update."""
     item = get_bank_item(db, item_id, teacher_id=teacher_id)
 
     unknown = set(fields) - set(_UPDATABLE_FIELDS)
@@ -348,11 +451,28 @@ def update_bank_item(db: Session, item_id: str, *, teacher_id: str, **fields) ->
         fields["togri_javob"] = letter
 
     if "fan_id" in fields and fields["fan_id"] is not None:
-        get_fan(db, fields["fan_id"], teacher_id=teacher_id)  # mavjudligi/egaligini tekshiradi
+        get_fan(db, fields["fan_id"], teacher_id=teacher_id)
 
     for key in ("kitob_nomi", "bolim_nomi"):
         if key in fields and fields[key] is not None:
             fields[key] = fields[key].strip() or None
+
+    # ✅ YANGI: agar savol matni yoki fan_id o'zgarayotgan bo'lsa -- takrorlanishni tekshirish
+    new_savol = fields.get("savol_html", item.savol_html)
+    new_fan_id = fields.get("fan_id", item.fan_id)
+    if "savol_html" in fields or "fan_id" in fields:
+        duplicate = _check_duplicate(
+            db,
+            teacher_id=teacher_id,
+            fan_id=new_fan_id,
+            savol_html=new_savol,
+            exclude_item_id=item_id,
+        )
+        if duplicate is not None:
+            raise BankServiceError(
+                f"Bu savol allaqachon mavjud (ID: {duplicate.id}). "
+                f"Tahrirlash bekor qilindi."
+            )
 
     for key, value in fields.items():
         if value is not None:

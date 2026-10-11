@@ -1,4 +1,5 @@
 # main.py
+from datetime import datetime
 import asyncio
 from contextlib import asynccontextmanager
 import os
@@ -18,7 +19,7 @@ import uvicorn
 from app.config import settings
 from app.database import engine
 from app import models
-from app.routers import auth, system, groups, tests, exams, results, uploads, dashboard, bank
+from app.routers import auth, system, groups, tests, exams, results, uploads, dashboard, bank, db_transfer
 from app.services.job_worker import start_worker, stop_worker  # YANGI -- durable job worker
 
 
@@ -39,18 +40,59 @@ TELEGRAM_TOKEN = getattr(settings, 'TELEGRAM_BOT_TOKEN', '')
 logger.info(f"ENABLE_BOT: {ENABLE_BOT}, Token present: {bool(TELEGRAM_TOKEN)}")
 
 async def run_bot():
-    """Bot polling ni ishga tushiradi. Xatolik bo'lsa, log qiladi."""
+    """Bot polling ni ishga tushiradi, adminga xabar beradi. Xatolik
+    bo'lsa yoki server to'xtatilganda (lifespan orqali cancel qilinganda)
+    ham log qiladi, imkon bo'lsa adminga "to'xtadi" xabarini yuboradi."""
+    from aiogram import Bot, Dispatcher
+    from bot.handlers import start, contact, omr, orders, admin
+
+    bot = Bot(token=TELEGRAM_TOKEN)
+    dp = Dispatcher()
+    dp.include_routers(start.router, contact.router, omr.router, orders.router, admin.router)
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    # ─── ADMINGA "BOT ISHGA TUSHDI" XABARI ───────────────────
+    if settings.ADMIN_TELEGRAM_CHAT_ID:
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            await bot.send_message(
+                chat_id=settings.ADMIN_TELEGRAM_CHAT_ID,
+                text=(
+                    "🟢 <b>Bot ishga tushdi</b>\n\n"
+                    f"🕐 Vaqt: <code>{now}</code>\n"
+                    f"🖥 Rejim: <b>Backend (FastAPI) ichida</b>\n"
+                    f"✅ Polling boshlandi"
+                ),
+                parse_mode="HTML",
+            )
+            logger.info(f"✅ Adminga xabar yuborildi: {settings.ADMIN_TELEGRAM_CHAT_ID}")
+        except Exception as e:
+            logger.error(f"❌ Adminga xabar yuborilmadi: {e}")
+    else:
+        logger.warning("⚠️ ADMIN_TELEGRAM_CHAT_ID yo'q -- xabar yuborilmadi")
+
+    logger.info("✅ Bot polling boshlandi")
     try:
-        from aiogram import Bot, Dispatcher
-        from bot.handlers import start, contact, omr, orders, admin
-        bot = Bot(token=TELEGRAM_TOKEN)
-        dp = Dispatcher()
-        dp.include_routers(start.router, contact.router, omr.router, orders.router, admin.router)
-        logger.info("✅ Bot ishga tushdi")
         await dp.start_polling(bot)
+    except asyncio.CancelledError:
+        logger.info("Bot polling bekor qilindi (server to'xtayapti)")
+        raise
     except Exception as e:
         logger.error(f"❌ Bot xatosi: {e}")
-
+    finally:
+        # ─── BOT TO'XTAGANDA HAM ADMINGA XABAR ───────────────
+        if settings.ADMIN_TELEGRAM_CHAT_ID:
+            try:
+                await bot.send_message(
+                    chat_id=settings.ADMIN_TELEGRAM_CHAT_ID,
+                    text="🔴 <b>Bot to'xtadi</b>",
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+        await bot.session.close()
+        
 # ─── LIFESPAN ───────────────────────────────────────────────
 if ENABLE_BOT and TELEGRAM_TOKEN:
     @asynccontextmanager
@@ -129,7 +171,7 @@ app = FastAPI(title="OMR Meroj API", lifespan=lifespan)
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://meroj.uz", "https://merojs.uz", "https://omr.meroj.uz"],
+    allow_origins=["http://localhost:5173", "http://meroj.uz", "https://meroj.uz", "https://omr.meroj.uz"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*", "Authorization", "Content-Type", "X-Requested-With", "Accept", "Origin", "Access-Control-Request-Method", "Access-Control-Request-Headers"],
@@ -145,6 +187,7 @@ app.include_router(results.router)
 app.include_router(uploads.router)
 app.include_router(dashboard.router)
 app.include_router(bank.router)
+app.include_router(db_transfer.router)
 
 migrate_old_database()
 

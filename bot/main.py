@@ -1,16 +1,7 @@
 # -*- coding: utf-8 -*-
-"""
-Telegram bot -- alohida process sifatida ishga tushadi:
-
-    python -m bot.main
-
-FastAPI backend (app/main.py) bilan bitta DB'ni bo'lishadi, lekin
-mustaqil hayot tsikliga ega (long polling). Productionda buni systemd
-service (yoki Docker container) sifatida ishga tushiring -- pastdagi
-README bo'limiga qarang.
-"""
 import asyncio
 import logging
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -42,20 +33,44 @@ async def main() -> None:
     dp.include_router(admin.router)
     dp.include_router(contact.router)
     dp.include_router(omr.router)
-    dp.include_router(orders.router)  # YANGI -- buyurtmalar navbati
+    dp.include_router(orders.router)
 
-    # Agar avval webhook o'rnatilgan bo'lsa, polling bilan ziddiyat
-    # bo'lmasligi uchun tozalab tashlaymiz.
     await bot.delete_webhook(drop_pending_updates=True)
+
+    # ─── ADMINGA "BOT ISHGA TUSHDI" XABARI ───────────────────
+    if settings.ADMIN_TELEGRAM_CHAT_ID:
+        try:
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            await bot.send_message(
+                chat_id=settings.ADMIN_TELEGRAM_CHAT_ID,
+                text=(
+                    "🟢 <b>Bot ishga tushdi</b>\n\n"
+                    f"🕐 Vaqt: <code>{now}</code>\n"
+                    f"🖥 Rejim: <b>Desktop / Production</b>\n"
+                    f"✅ Polling boshlandi"
+                ),
+            )
+            logger.info(f"✅ Adminga xabar yuborildi: {settings.ADMIN_TELEGRAM_CHAT_ID}")
+        except Exception as e:
+            logger.error(f"❌ Adminga xabar yuborilmadi: {e}")
+    else:
+        logger.warning("⚠️ ADMIN_TELEGRAM_CHAT_ID yo'q -- xabar yuborilmadi")
 
     logger.info("Bot polling boshlandi")
     try:
         await dp.start_polling(bot)
     finally:
+        # ─── BOT TO'XTaganda ham adminga xabar (ixtiyoriy) ───
+        if settings.ADMIN_TELEGRAM_CHAT_ID:
+            try:
+                await bot.send_message(
+                    chat_id=settings.ADMIN_TELEGRAM_CHAT_ID,
+                    text="🔴 <b>Bot to'xtadi</b>",
+                )
+            except Exception:
+                pass
         await bot.session.close()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-
